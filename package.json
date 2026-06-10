@@ -1,0 +1,23 @@
+{
+  "name": "financeiro",
+  "private": true,
+  "workspaces": [
+    "api",
+    "front"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspaces --if-present",
+    "dev:api": "npm run dev -w api",
+    "dev:front": "npm run dev -w front",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "lint:fix": "npm run lint:fix --workspaces --if-present",
+    "format": "npm run format --workspaces --if-present",
+    "db:generate": "npm run db:generate -w api",
+    "db:migrate": "npm run db:migrate -w api",
+    "db:studio": "npm run db:studio -w api"
+  },
+  "engines": {
+    "node": ">=24.15.0 <25"
+  }
+}

@@ -1,0 +1,33 @@
+---
+description: Padrão visual do frontend — tokens e componentes definidos em front/DESIGN.md
+globs: front/**/*
+alwaysApply: false
+---
+
+# Design System (front/DESIGN.md)
+
+Referência completa: `front/DESIGN.md`. Resumo operacional:
+
+## Cores
+- CTA / links: `#533afd` (`primary`) — usar com parcimônia, um botão filled por seção
+- Texto: `#0d253d` (`ink`), secundário `#64748d` (`ink-mute`)
+- Superfícies: `#ffffff` (`canvas`), `#f6f9fc` (`canvas-soft`), `#f5e9d4` (`canvas-cream`)
+- Bordas: `#e3e8ee` (`hairline`), inputs `#a8c3de` (`hairline-input`)
+
+## Tipografia (Inter weight 300)
+- Display: weight 300 + letter-spacing negativo (`text-display-*`)
+- Body padrão: 15px weight 300
+- Valores monetários: sempre `tabular-money` (`font-feature-settings: "tnum"`)
+- Global: `font-feature-settings: "ss01"` no body
+
+## Componentes
+- Botões: pill (`rounded-full`), padding `8px 16px`, primary filled indigo
+- Cards: `rounded-lg` (12px), borda hairline, padding 32px em feature cards
+- Inputs: `rounded-sm` (6px), borda hairline-input, focus border primary
+- Heróis de marketing/auth: gradient mesh no terço superior (ver `GradientMesh`)
+
+## Não fazer
+- Display acima de weight 300
+- Botões retangulares arredondados (usar pill)
+- Células de dinheiro sem `tnum`
+- Indigo como cor de texto body
