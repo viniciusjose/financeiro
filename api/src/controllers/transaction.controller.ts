@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
+import type { ApplyScope } from "@/lib/transaction-series.js";
 import type { TransactionService } from "@/services/transaction.service.js";
 import { sendError, sendSuccess } from "@/views/response.js";
 
@@ -36,9 +37,13 @@ export class TransactionController {
         categoryId?: string | null;
         creditCardId?: string | null;
         date: string;
+        recurrence?: {
+          kind: "installment" | "recurring";
+          totalOccurrences: number;
+        };
       };
 
-      const transaction = await this.transactionService.create({
+      const result = await this.transactionService.create({
         userId: request.user.sub,
         description: body.description,
         amount: body.amount,
@@ -46,9 +51,14 @@ export class TransactionController {
         categoryId: body.categoryId,
         creditCardId: body.creditCardId,
         date: new Date(body.date),
+        recurrence: body.recurrence,
       });
 
-      return sendSuccess(reply, transaction, 201, "Transação criada com sucesso");
+      const message = body.recurrence
+        ? "Transações criadas com sucesso"
+        : "Transação criada com sucesso";
+
+      return sendSuccess(reply, result, 201, message);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Erro ao criar transação";
       return sendError(reply, message, 400);
@@ -65,6 +75,7 @@ export class TransactionController {
         categoryId?: string | null;
         creditCardId?: string | null;
         date?: string;
+        applyScope?: ApplyScope;
       };
 
       const transaction = await this.transactionService.update({
@@ -76,6 +87,7 @@ export class TransactionController {
         categoryId: body.categoryId,
         creditCardId: body.creditCardId,
         date: body.date ? new Date(body.date) : undefined,
+        applyScope: body.applyScope,
       });
 
       return sendSuccess(reply, transaction, 200, "Transação atualizada com sucesso");
@@ -88,7 +100,8 @@ export class TransactionController {
   delete = async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { id } = request.params as { id: string };
-      await this.transactionService.delete(id, request.user.sub);
+      const { applyScope } = request.query as { applyScope?: ApplyScope };
+      await this.transactionService.delete(id, request.user.sub, applyScope ?? "only_this");
       return sendSuccess(reply, null, 200, "Transação removida com sucesso");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Erro ao remover transação";

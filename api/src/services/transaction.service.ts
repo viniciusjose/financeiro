@@ -1,6 +1,18 @@
+import {
+  addMonths,
+  type ApplyScope,
+  buildSeriesAmounts,
+  buildSeriesDates,
+  type SeriesKind,
+} from "@/lib/transaction-series.js";
 import type { TransactionRepository } from "@/repositories/transaction.repository.js";
 import type { CategoryService } from "@/services/category.service.js";
 import type { CreditCardService } from "@/services/credit-card.service.js";
+
+export interface RecurrenceInput {
+  kind: SeriesKind;
+  totalOccurrences: number;
+}
 
 export interface CreateTransactionInput {
   userId: string;
@@ -10,6 +22,7 @@ export interface CreateTransactionInput {
   categoryId?: string | null;
   creditCardId?: string | null;
   date: Date;
+  recurrence?: RecurrenceInput;
 }
 
 export interface UpdateTransactionInput {
@@ -21,6 +34,7 @@ export interface UpdateTransactionInput {
   categoryId?: string | null;
   creditCardId?: string | null;
   date?: Date;
+  applyScope?: ApplyScope;
 }
 
 export class TransactionService {
@@ -63,17 +77,48 @@ export class TransactionService {
       input.type,
     );
 
-    const transaction = await this.transactionRepository.create({
+    if (!input.recurrence) {
+      const transaction = await this.transactionRepository.create({
+        userId: input.userId,
+        description: input.description,
+        amount: input.amount,
+        type: input.type,
+        categoryId,
+        creditCardId,
+        date: input.date,
+        seriesId: null,
+        seriesKind: null,
+        seriesIndex: null,
+        seriesTotal: null,
+      });
+
+      return serializeTransaction(transaction);
+    }
+
+    const { kind, totalOccurrences } = input.recurrence;
+    const seriesId = this.transactionRepository.generateSeriesId();
+    const amounts = buildSeriesAmounts(kind, input.amount, totalOccurrences);
+    const dates = buildSeriesDates(input.date, totalOccurrences);
+
+    const rows = dates.map((date, index) => ({
       userId: input.userId,
       description: input.description,
-      amount: input.amount,
+      amount: amounts[index],
       type: input.type,
       categoryId,
       creditCardId,
-      date: input.date,
-    });
+      seriesId,
+      seriesKind: kind,
+      seriesIndex: index + 1,
+      seriesTotal: totalOccurrences,
+      date,
+    }));
 
-    return serializeTransaction(transaction);
+    const created = await this.transactionRepository.createMany(rows);
+
+    return {
+      items: created.map(serializeTransaction),
+    };
   }
 
   async update(input: UpdateTransactionInput) {
@@ -83,6 +128,7 @@ export class TransactionService {
       throw new Error("Transação não encontrada");
     }
 
+    const applyScope = input.applyScope ?? "only_this";
     const nextType = input.type ?? existing.type;
     const categoryId =
       input.categoryId !== undefined
@@ -96,6 +142,45 @@ export class TransactionService {
             nextType,
           )
         : undefined;
+
+    if (
+      applyScope === "this_and_future" &&
+      existing.seriesId &&
+      existing.seriesIndex != null
+    ) {
+      const siblings = await this.transactionRepository.listBySeriesId(
+        existing.seriesId,
+        input.userId,
+      );
+      const currentIndex = existing.seriesIndex ?? 0;
+      const future = siblings.filter(
+        (item) => item.seriesIndex != null && item.seriesIndex >= currentIndex,
+      );
+
+      let lastUpdated = existing;
+
+      for (const sibling of future) {
+        const offset =
+          sibling.seriesIndex != null ? sibling.seriesIndex - currentIndex : 0;
+        const nextDate =
+          input.date !== undefined ? addMonths(input.date, offset) : sibling.date;
+
+        const updated = await this.transactionRepository.update(sibling.id, input.userId, {
+          description: input.description,
+          amount: input.amount,
+          type: input.type,
+          categoryId,
+          creditCardId,
+          date: nextDate,
+        });
+
+        if (updated) {
+          lastUpdated = updated;
+        }
+      }
+
+      return serializeTransaction(lastUpdated);
+    }
 
     const transaction = await this.transactionRepository.update(input.id, input.userId, {
       description: input.description,
@@ -113,7 +198,31 @@ export class TransactionService {
     return serializeTransaction(transaction);
   }
 
-  async delete(id: string, userId: string) {
+  async delete(id: string, userId: string, applyScope: ApplyScope = "only_this") {
+    const existing = await this.transactionRepository.findById(id, userId);
+
+    if (!existing) {
+      throw new Error("Transação não encontrada");
+    }
+
+    if (
+      applyScope === "this_and_future" &&
+      existing.seriesId &&
+      existing.seriesIndex != null
+    ) {
+      const removed = await this.transactionRepository.deleteFromSeriesIndex(
+        existing.seriesId,
+        userId,
+        existing.seriesIndex,
+      );
+
+      if (removed === 0) {
+        throw new Error("Transação não encontrada");
+      }
+
+      return;
+    }
+
     const deleted = await this.transactionRepository.delete(id, userId);
 
     if (!deleted) {
@@ -159,6 +268,10 @@ function serializeTransaction(transaction: {
   type: "income" | "expense";
   categoryId: string | null;
   creditCardId: string | null;
+  seriesId: string | null;
+  seriesKind: "installment" | "recurring" | null;
+  seriesIndex: number | null;
+  seriesTotal: number | null;
   category?: {
     id: string;
     name: string;
@@ -183,6 +296,10 @@ function serializeTransaction(transaction: {
     type: transaction.type,
     categoryId: transaction.categoryId,
     creditCardId: transaction.creditCardId,
+    seriesId: transaction.seriesId,
+    seriesKind: transaction.seriesKind,
+    seriesIndex: transaction.seriesIndex,
+    seriesTotal: transaction.seriesTotal,
     category: transaction.category?.id
       ? {
           id: transaction.category.id,

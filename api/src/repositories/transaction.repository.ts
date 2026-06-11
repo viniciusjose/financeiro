@@ -1,4 +1,5 @@
 import { and, count, desc, eq, gte, inArray, isNotNull, sql, sum } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
 import { db } from "@/db/index.js";
 import { formatDateInTimezone, getCurrentMonthStartDateString } from "@/lib/credit-card-billing.js";
 import { categories } from "@/models/schema/categories.js";
@@ -109,6 +110,98 @@ export class TransactionRepository {
     }
 
     return created;
+  }
+
+  async createMany(data: NewTransaction[]): Promise<TransactionWithCategory[]> {
+    if (data.length === 0) {
+      return [];
+    }
+
+    const userId = data[0]?.userId;
+
+    if (!userId) {
+      throw new Error("Usuário inválido");
+    }
+
+    return db.transaction(async (tx) => {
+      const inserted = await tx.insert(transactions).values(data).returning();
+
+      const rows = await tx
+        .select({
+          transaction: transactions,
+          category: {
+            id: categories.id,
+            name: categories.name,
+            icon: categories.icon,
+            color: categories.color,
+          },
+          creditCard: {
+            id: creditCards.id,
+            name: creditCards.name,
+            lastFourDigits: creditCards.lastFourDigits,
+            brand: creditCards.brand,
+            brandName: creditCards.brandName,
+          },
+        })
+        .from(transactions)
+        .leftJoin(categories, eq(transactions.categoryId, categories.id))
+        .leftJoin(creditCards, eq(transactions.creditCardId, creditCards.id))
+        .where(
+          inArray(
+            transactions.id,
+            inserted.map((item) => item.id),
+          ),
+        )
+        .orderBy(transactions.seriesIndex);
+
+      return rows.map(mapRow);
+    });
+  }
+
+  async listBySeriesId(seriesId: string, userId: string): Promise<TransactionWithCategory[]> {
+    const rows = await db
+      .select({
+        transaction: transactions,
+        category: {
+          id: categories.id,
+          name: categories.name,
+          icon: categories.icon,
+          color: categories.color,
+        },
+        creditCard: {
+          id: creditCards.id,
+          name: creditCards.name,
+          lastFourDigits: creditCards.lastFourDigits,
+          brand: creditCards.brand,
+          brandName: creditCards.brandName,
+        },
+      })
+      .from(transactions)
+      .leftJoin(categories, eq(transactions.categoryId, categories.id))
+      .leftJoin(creditCards, eq(transactions.creditCardId, creditCards.id))
+      .where(and(eq(transactions.seriesId, seriesId), eq(transactions.userId, userId)))
+      .orderBy(transactions.seriesIndex);
+
+    return rows.map(mapRow);
+  }
+
+  async deleteFromSeriesIndex(seriesId: string, userId: string, fromIndex: number): Promise<number> {
+    const result = await db
+      .delete(transactions)
+      .where(
+        and(
+          eq(transactions.seriesId, seriesId),
+          eq(transactions.userId, userId),
+          gte(transactions.seriesIndex, fromIndex),
+        ),
+      )
+      .returning({ id: transactions.id });
+
+    return result.length;
+  }
+
+  generateSeriesId() {
+    return randomUUID();
   }
 
   async update(

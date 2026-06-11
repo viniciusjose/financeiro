@@ -14,6 +14,17 @@ export const transactionIdSchema = {
   }),
 };
 
+const recurrenceSchema = z.object({
+  kind: z.enum(["installment", "recurring"]),
+  totalOccurrences: z
+    .number()
+    .int("Quantidade deve ser um número inteiro")
+    .min(2, "Quantidade mínima é 2")
+    .max(48, "Quantidade máxima é 48"),
+});
+
+const applyScopeSchema = z.enum(["only_this", "this_and_future"]);
+
 export const createTransactionSchema = {
   body: z.object({
     description: z.string().min(1, "Descrição é obrigatória"),
@@ -22,6 +33,7 @@ export const createTransactionSchema = {
     categoryId: z.string().uuid("Categoria inválida").optional().nullable(),
     creditCardId: z.string().uuid("Cartão inválido").optional().nullable(),
     date: z.string().datetime("Data inválida"),
+    recurrence: recurrenceSchema.optional(),
   }),
 };
 
@@ -36,5 +48,15 @@ export const updateTransactionSchema = {
     categoryId: z.string().uuid("Categoria inválida").optional().nullable(),
     creditCardId: z.string().uuid("Cartão inválido").optional().nullable(),
     date: z.string().datetime().optional(),
+    applyScope: applyScopeSchema.optional(),
+  }),
+};
+
+export const deleteTransactionSchema = {
+  params: z.object({
+    id: z.string().uuid("ID inválido"),
+  }),
+  querystring: z.object({
+    applyScope: applyScopeSchema.optional(),
   }),
 };

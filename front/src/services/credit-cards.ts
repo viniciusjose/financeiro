@@ -17,6 +17,10 @@ export interface CreditCardBillTransaction {
   description: string;
   amount: number;
   date: string;
+  seriesId: string | null;
+  seriesKind: "installment" | "recurring" | null;
+  seriesIndex: number | null;
+  seriesTotal: number | null;
   category?: {
     id: string;
     name: string;

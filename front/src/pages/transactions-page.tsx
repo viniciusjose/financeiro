@@ -2,7 +2,9 @@ import { Pencil, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { CategoryBadge } from "@/components/categories/category-badge";
 import { PageShell } from "@/components/layout/page-shell";
+import { SeriesScopeDialog } from "@/components/transactions/series-scope-dialog";
 import { TransactionFormDialog } from "@/components/transactions/transaction-form-dialog";
+import { TransactionSeriesBadge } from "@/components/transactions/transaction-series-badge";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -21,8 +23,13 @@ import { useTransactions } from "@/hooks/use-transactions";
 import { formatCents } from "@/lib/money";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
-import type { CreateTransactionInput, UpdateTransactionInput } from "@/schemas/transaction.schema";
+import type { ApplyScope, CreateTransactionInput, UpdateTransactionInput } from "@/schemas/transaction.schema";
 import type { Transaction } from "@/services/transactions";
+
+type PendingEdit = {
+  transaction: Transaction;
+  values: UpdateTransactionInput;
+};
 
 export function TransactionsPage() {
   const { categories } = useCategories();
@@ -39,6 +46,9 @@ export function TransactionsPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState<Transaction | undefined>();
   const [deletingTransaction, setDeletingTransaction] = useState<Transaction | undefined>();
+  const [pendingEdit, setPendingEdit] = useState<PendingEdit | undefined>();
+  const [scopeDialogMode, setScopeDialogMode] = useState<"edit" | "delete" | null>(null);
+  const [isScopeSubmitting, setIsScopeSubmitting] = useState(false);
 
   const openCreate = () => {
     setEditingTransaction(undefined);
@@ -52,11 +62,45 @@ export function TransactionsPage() {
 
   const handleSubmit = async (values: CreateTransactionInput | UpdateTransactionInput) => {
     if (editingTransaction) {
+      if (editingTransaction.seriesId) {
+        setPendingEdit({ transaction: editingTransaction, values });
+        setScopeDialogMode("edit");
+        setFormOpen(false);
+        return false;
+      }
+
       await updateTransaction(editingTransaction.id, values);
+      setEditingTransaction(undefined);
       return;
     }
 
     await createTransaction(values);
+  };
+
+  const handleScopeConfirm = async (scope: ApplyScope) => {
+    setIsScopeSubmitting(true);
+
+    try {
+      if (scopeDialogMode === "edit" && pendingEdit) {
+        await updateTransaction(pendingEdit.transaction.id, pendingEdit.values, scope);
+        toast.success("Transação atualizada com sucesso.");
+        setPendingEdit(undefined);
+        setEditingTransaction(undefined);
+      }
+
+      if (scopeDialogMode === "delete" && deletingTransaction) {
+        await deleteTransaction(deletingTransaction.id, scope);
+        toast.success("Transação removida com sucesso.");
+        setDeletingTransaction(undefined);
+      }
+
+      setScopeDialogMode(null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Não foi possível concluir a operação.";
+      toast.error(message);
+    } finally {
+      setIsScopeSubmitting(false);
+    }
   };
 
   const handleDelete = async () => {
@@ -73,6 +117,21 @@ export function TransactionsPage() {
       toast.error(message);
     }
   };
+
+  const requestDelete = (transaction: Transaction) => {
+    if (transaction.seriesId) {
+      setDeletingTransaction(transaction);
+      setScopeDialogMode("delete");
+      return;
+    }
+
+    setDeletingTransaction(transaction);
+  };
+
+  const scopeDescription =
+    scopeDialogMode === "edit"
+      ? pendingEdit?.transaction.description
+      : deletingTransaction?.description;
 
   return (
     <>
@@ -126,6 +185,7 @@ export function TransactionsPage() {
                 <div className="min-w-0 space-y-2">
                   <div className="flex flex-wrap items-center gap-2">
                     <h2 className="text-[15px] font-normal text-ink">{transaction.description}</h2>
+                    <TransactionSeriesBadge transaction={transaction} />
                     {transaction.category ? (
                       <CategoryBadge
                         name={transaction.category.name}
@@ -166,7 +226,7 @@ export function TransactionsPage() {
                     size="icon"
                     className="text-destructive hover:text-destructive"
                     aria-label={`Excluir ${transaction.description}`}
-                    onClick={() => setDeletingTransaction(transaction)}
+                    onClick={() => requestDelete(transaction)}
                   >
                     <Trash2 className="size-4" />
                   </Button>
@@ -179,15 +239,37 @@ export function TransactionsPage() {
 
       <TransactionFormDialog
         open={formOpen}
-        onOpenChange={setFormOpen}
+        onOpenChange={(open) => {
+          setFormOpen(open);
+
+          if (!open) {
+            setEditingTransaction(undefined);
+          }
+        }}
         transaction={editingTransaction}
         categories={categories}
         creditCards={creditCards}
         onSubmit={handleSubmit}
       />
 
+      {scopeDialogMode && scopeDescription ? (
+        <SeriesScopeDialog
+          open={Boolean(scopeDialogMode)}
+          onOpenChange={(open) => {
+            if (!open) {
+              setScopeDialogMode(null);
+              setPendingEdit(undefined);
+            }
+          }}
+          mode={scopeDialogMode}
+          description={scopeDescription}
+          onConfirm={(scope) => void handleScopeConfirm(scope)}
+          isSubmitting={isScopeSubmitting}
+        />
+      ) : null}
+
       <AlertDialog
-        open={Boolean(deletingTransaction)}
+        open={Boolean(deletingTransaction) && !deletingTransaction?.seriesId}
         onOpenChange={(open) => {
           if (!open) {
             setDeletingTransaction(undefined);

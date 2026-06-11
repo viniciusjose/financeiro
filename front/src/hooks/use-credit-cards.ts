@@ -1,63 +1,67 @@
-import { useCallback, useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useState } from "react";
+import { getQueryErrorMessage } from "@/lib/query-error";
+import { queryKeys } from "@/lib/query-keys";
 import type { CreateCreditCardInput, UpdateCreditCardInput } from "@/schemas/credit-card.schema";
-import { type CreditCard, creditCardsService } from "@/services/credit-cards";
+import { creditCardsService } from "@/services/credit-cards";
 
 export function useCreditCards() {
-  const [creditCards, setCreditCards] = useState<CreditCard[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [includeInactive, setIncludeInactive] = useState(false);
+  const queryClient = useQueryClient();
 
-  const refresh = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
+  const { data: creditCards = [], isLoading, error, refetch } = useQuery({
+    queryKey: queryKeys.creditCards.list({ includeInactive }),
+    queryFn: () => creditCardsService.list({ includeInactive }),
+  });
 
-    try {
-      const data = await creditCardsService.list({ includeInactive });
-      setCreditCards(data);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Erro ao carregar cartões.";
-      setError(message);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [includeInactive]);
+  const invalidateCreditCards = useCallback(() => {
+    return queryClient.invalidateQueries({ queryKey: queryKeys.creditCards.all });
+  }, [queryClient]);
 
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  const createMutation = useMutation({
+    mutationFn: (input: CreateCreditCardInput) => creditCardsService.create(input),
+    onSuccess: invalidateCreditCards,
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, input }: { id: string; input: UpdateCreditCardInput }) =>
+      creditCardsService.update(id, input),
+    onSuccess: invalidateCreditCards,
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => creditCardsService.delete(id),
+    onSuccess: invalidateCreditCards,
+  });
 
   const createCreditCard = useCallback(
     async (input: CreateCreditCardInput) => {
-      await creditCardsService.create(input);
-      await refresh();
+      await createMutation.mutateAsync(input);
     },
-    [refresh],
+    [createMutation],
   );
 
   const updateCreditCard = useCallback(
     async (id: string, input: UpdateCreditCardInput) => {
-      await creditCardsService.update(id, input);
-      await refresh();
+      await updateMutation.mutateAsync({ id, input });
     },
-    [refresh],
+    [updateMutation],
   );
 
   const deleteCreditCard = useCallback(
     async (id: string) => {
-      await creditCardsService.delete(id);
-      await refresh();
+      await deleteMutation.mutateAsync(id);
     },
-    [refresh],
+    [deleteMutation],
   );
 
   return {
     creditCards,
     isLoading,
-    error,
+    error: getQueryErrorMessage(error, "Erro ao carregar cartões."),
     includeInactive,
     setIncludeInactive,
-    refresh,
+    refresh: refetch,
     createCreditCard,
     updateCreditCard,
     deleteCreditCard,

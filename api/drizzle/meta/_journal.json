@@ -64,6 +64,13 @@
       "when": 1781105000000,
       "tag": "0008_transaction_credit_card",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1781110000000,
+      "tag": "0009_transaction_series",
+      "breakpoints": true
     }
   ]
 }

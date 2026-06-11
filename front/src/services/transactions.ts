@@ -1,5 +1,5 @@
 import { api } from "@/lib/api";
-import type { CreateTransactionInput, UpdateTransactionInput } from "@/schemas/transaction.schema";
+import type { ApplyScope, CreateTransactionInput, UpdateTransactionInput } from "@/schemas/transaction.schema";
 import { toApiCreatePayload, toApiUpdatePayload } from "@/schemas/transaction.schema";
 
 export interface TransactionCategory {
@@ -24,6 +24,10 @@ export interface Transaction {
   type: "income" | "expense";
   categoryId: string | null;
   creditCardId: string | null;
+  seriesId: string | null;
+  seriesKind: "installment" | "recurring" | null;
+  seriesIndex: number | null;
+  seriesTotal: number | null;
   category?: TransactionCategory;
   creditCard?: TransactionCreditCard;
   date: string;
@@ -36,6 +40,10 @@ interface ListTransactionsResponse {
   total: number;
   page: number;
   perPage: number;
+}
+
+interface CreateSeriesResponse {
+  items: Transaction[];
 }
 
 export const transactionsService = {
@@ -60,14 +68,28 @@ export const transactionsService = {
   },
 
   async create(input: CreateTransactionInput) {
-    return api.post<Transaction>("/api/transactions", toApiCreatePayload(input));
+    const payload = toApiCreatePayload(input);
+
+    if (payload.recurrence) {
+      return api.post<CreateSeriesResponse>("/api/transactions", payload);
+    }
+
+    return api.post<Transaction>("/api/transactions", payload);
   },
 
-  async update(id: string, input: UpdateTransactionInput) {
-    return api.put<Transaction>(`/api/transactions/${id}`, toApiUpdatePayload(input));
+  async update(id: string, input: UpdateTransactionInput, applyScope?: ApplyScope) {
+    return api.put<Transaction>(`/api/transactions/${id}`, toApiUpdatePayload(input, applyScope));
   },
 
-  async delete(id: string) {
-    await api.delete<null>(`/api/transactions/${id}`);
+  async delete(id: string, applyScope?: ApplyScope) {
+    const params = new URLSearchParams();
+
+    if (applyScope) {
+      params.set("applyScope", applyScope);
+    }
+
+    const query = params.toString();
+    const path = query ? `/api/transactions/${id}?${query}` : `/api/transactions/${id}`;
+    await api.delete<null>(path);
   },
 };

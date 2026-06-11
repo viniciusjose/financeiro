@@ -1,6 +1,6 @@
 # Project State
 
-**Last updated:** 2026-06-10
+**Last updated:** 2026-06-10 (transaction-series)
 
 ## Session
 
@@ -22,6 +22,9 @@
 - Specified feature: **Cartões de Crédito** → `.specs/features/credit-cards/spec.md` (21 requirements, P1: 17)
 - Implemented: **Cartões de Crédito** — P1 CRUD completo (API + UI `/credit-cards`)
 - Migration `0005_credit_cards` criada (aplicar manualmente: `npm run db:migrate` na pasta `api/`)
+- Specified feature: **Transações Parceladas e Recorrentes** → `.specs/features/transaction-series/spec.md` (27 requirements)
+- Decisões D1–D5: parcelada divide total; recorrente valor mensal; escopo edição/exclusão; mín 2 meses
+- Implemented: **Transações Parceladas e Recorrentes** — API + front (migration `0009_transaction_series`)
 
 ## Decisions
 

@@ -1,63 +1,77 @@
-import { useCallback, useEffect, useState } from "react";
-import type { CreateTransactionInput, UpdateTransactionInput } from "@/schemas/transaction.schema";
-import { type Transaction, transactionsService } from "@/services/transactions";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback } from "react";
+import { getQueryErrorMessage } from "@/lib/query-error";
+import { queryKeys } from "@/lib/query-keys";
+import type { ApplyScope, CreateTransactionInput, UpdateTransactionInput } from "@/schemas/transaction.schema";
+import { transactionsService } from "@/services/transactions";
 
 export function useTransactions(page = 1, perPage = 10) {
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [total, setTotal] = useState(0);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
-  const refresh = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
+  const { data, isLoading, error, refetch } = useQuery({
+    queryKey: queryKeys.transactions.list({ page, perPage }),
+    queryFn: () => transactionsService.list({ page, perPage }),
+  });
 
-    try {
-      const data = await transactionsService.list({ page, perPage });
-      setTransactions(data.items);
-      setTotal(data.total);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Erro ao carregar transações.";
-      setError(message);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [page, perPage]);
+  const invalidateRelatedQueries = useCallback(() => {
+    return Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.transactions.all }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.creditCards.all }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.categories.all }),
+    ]);
+  }, [queryClient]);
 
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  const createMutation = useMutation({
+    mutationFn: (input: CreateTransactionInput) => transactionsService.create(input),
+    onSuccess: invalidateRelatedQueries,
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({
+      id,
+      input,
+      applyScope,
+    }: {
+      id: string;
+      input: UpdateTransactionInput;
+      applyScope?: ApplyScope;
+    }) => transactionsService.update(id, input, applyScope),
+    onSuccess: invalidateRelatedQueries,
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: ({ id, applyScope }: { id: string; applyScope?: ApplyScope }) =>
+      transactionsService.delete(id, applyScope),
+    onSuccess: invalidateRelatedQueries,
+  });
 
   const createTransaction = useCallback(
     async (input: CreateTransactionInput) => {
-      await transactionsService.create(input);
-      await refresh();
+      await createMutation.mutateAsync(input);
     },
-    [refresh],
+    [createMutation],
   );
 
   const updateTransaction = useCallback(
-    async (id: string, input: UpdateTransactionInput) => {
-      await transactionsService.update(id, input);
-      await refresh();
+    async (id: string, input: UpdateTransactionInput, applyScope?: ApplyScope) => {
+      await updateMutation.mutateAsync({ id, input, applyScope });
     },
-    [refresh],
+    [updateMutation],
   );
 
   const deleteTransaction = useCallback(
-    async (id: string) => {
-      await transactionsService.delete(id);
-      await refresh();
+    async (id: string, applyScope?: ApplyScope) => {
+      await deleteMutation.mutateAsync({ id, applyScope });
     },
-    [refresh],
+    [deleteMutation],
   );
 
   return {
-    transactions,
-    total,
+    transactions: data?.items ?? [],
+    total: data?.total ?? 0,
     isLoading,
-    error,
-    refresh,
+    error: getQueryErrorMessage(error, "Erro ao carregar transações."),
+    refresh: refetch,
     createTransaction,
     updateTransaction,
     deleteTransaction,

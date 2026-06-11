@@ -1,63 +1,67 @@
-import { useCallback, useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useState } from "react";
+import { getQueryErrorMessage } from "@/lib/query-error";
+import { queryKeys } from "@/lib/query-keys";
 import type { CreateBankAccountInput, UpdateBankAccountInput } from "@/schemas/bank-account.schema";
-import { type BankAccount, bankAccountsService } from "@/services/bank-accounts";
+import { bankAccountsService } from "@/services/bank-accounts";
 
 export function useBankAccounts() {
-  const [accounts, setAccounts] = useState<BankAccount[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [includeInactive, setIncludeInactive] = useState(false);
+  const queryClient = useQueryClient();
 
-  const refresh = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
+  const { data: accounts = [], isLoading, error, refetch } = useQuery({
+    queryKey: queryKeys.bankAccounts.list({ includeInactive }),
+    queryFn: () => bankAccountsService.list({ includeInactive }),
+  });
 
-    try {
-      const data = await bankAccountsService.list({ includeInactive });
-      setAccounts(data);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Erro ao carregar contas.";
-      setError(message);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [includeInactive]);
+  const invalidateBankAccounts = useCallback(() => {
+    return queryClient.invalidateQueries({ queryKey: queryKeys.bankAccounts.all });
+  }, [queryClient]);
 
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  const createMutation = useMutation({
+    mutationFn: (input: CreateBankAccountInput) => bankAccountsService.create(input),
+    onSuccess: invalidateBankAccounts,
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, input }: { id: string; input: UpdateBankAccountInput }) =>
+      bankAccountsService.update(id, input),
+    onSuccess: invalidateBankAccounts,
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => bankAccountsService.delete(id),
+    onSuccess: invalidateBankAccounts,
+  });
 
   const createAccount = useCallback(
     async (input: CreateBankAccountInput) => {
-      await bankAccountsService.create(input);
-      await refresh();
+      await createMutation.mutateAsync(input);
     },
-    [refresh],
+    [createMutation],
   );
 
   const updateAccount = useCallback(
     async (id: string, input: UpdateBankAccountInput) => {
-      await bankAccountsService.update(id, input);
-      await refresh();
+      await updateMutation.mutateAsync({ id, input });
     },
-    [refresh],
+    [updateMutation],
   );
 
   const deleteAccount = useCallback(
     async (id: string) => {
-      await bankAccountsService.delete(id);
-      await refresh();
+      await deleteMutation.mutateAsync(id);
     },
-    [refresh],
+    [deleteMutation],
   );
 
   return {
     accounts,
     isLoading,
-    error,
+    error: getQueryErrorMessage(error, "Erro ao carregar contas."),
     includeInactive,
     setIncludeInactive,
-    refresh,
+    refresh: refetch,
     createAccount,
     updateAccount,
     deleteAccount,

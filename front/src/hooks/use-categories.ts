@@ -1,63 +1,67 @@
-import { useCallback, useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useState } from "react";
+import { getQueryErrorMessage } from "@/lib/query-error";
+import { queryKeys } from "@/lib/query-keys";
 import type { CreateCategoryInput, UpdateCategoryInput } from "@/schemas/category.schema";
-import { type Category, categoriesService } from "@/services/categories";
+import { categoriesService } from "@/services/categories";
 
 export function useCategories() {
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [includeInactive, setIncludeInactive] = useState(false);
+  const queryClient = useQueryClient();
 
-  const refresh = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
+  const { data: categories = [], isLoading, error, refetch } = useQuery({
+    queryKey: queryKeys.categories.list({ includeInactive }),
+    queryFn: () => categoriesService.list({ includeInactive }),
+  });
 
-    try {
-      const data = await categoriesService.list({ includeInactive });
-      setCategories(data);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Erro ao carregar categorias.";
-      setError(message);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [includeInactive]);
+  const invalidateCategories = useCallback(() => {
+    return queryClient.invalidateQueries({ queryKey: queryKeys.categories.all });
+  }, [queryClient]);
 
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  const createMutation = useMutation({
+    mutationFn: (input: CreateCategoryInput) => categoriesService.create(input),
+    onSuccess: invalidateCategories,
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, input }: { id: string; input: UpdateCategoryInput }) =>
+      categoriesService.update(id, input),
+    onSuccess: invalidateCategories,
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => categoriesService.delete(id),
+    onSuccess: invalidateCategories,
+  });
 
   const createCategory = useCallback(
     async (input: CreateCategoryInput) => {
-      await categoriesService.create(input);
-      await refresh();
+      await createMutation.mutateAsync(input);
     },
-    [refresh],
+    [createMutation],
   );
 
   const updateCategory = useCallback(
     async (id: string, input: UpdateCategoryInput) => {
-      await categoriesService.update(id, input);
-      await refresh();
+      await updateMutation.mutateAsync({ id, input });
     },
-    [refresh],
+    [updateMutation],
   );
 
   const deleteCategory = useCallback(
     async (id: string) => {
-      await categoriesService.delete(id);
-      await refresh();
+      await deleteMutation.mutateAsync(id);
     },
-    [refresh],
+    [deleteMutation],
   );
 
   return {
     categories,
     isLoading,
-    error,
+    error: getQueryErrorMessage(error, "Erro ao carregar categorias."),
     includeInactive,
     setIncludeInactive,
-    refresh,
+    refresh: refetch,
     createCategory,
     updateCategory,
     deleteCategory,

@@ -337,6 +337,10 @@ function serializeBillTransaction(transaction: {
   description: string;
   amount: number;
   date: Date;
+  seriesId: string | null;
+  seriesKind: "installment" | "recurring" | null;
+  seriesIndex: number | null;
+  seriesTotal: number | null;
   category?: {
     id: string;
     name: string;
@@ -349,6 +353,10 @@ function serializeBillTransaction(transaction: {
     description: transaction.description,
     amount: transaction.amount,
     date: transaction.date.toISOString(),
+    seriesId: transaction.seriesId,
+    seriesKind: transaction.seriesKind,
+    seriesIndex: transaction.seriesIndex,
+    seriesTotal: transaction.seriesTotal,
     category: transaction.category?.id
       ? {
           id: transaction.category.id,

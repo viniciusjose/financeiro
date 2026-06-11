@@ -30,6 +30,9 @@ import { cn } from "@/lib/utils";
 import {
   type CreateTransactionInput,
   createTransactionSchema,
+  getAmountLabel,
+  getRecurrenceCountLabel,
+  type TransactionMode,
   type UpdateTransactionInput,
 } from "@/schemas/transaction.schema";
 import type { Category } from "@/services/categories";
@@ -45,8 +48,16 @@ interface TransactionFormDialogProps {
   defaultCreditCardId?: string | null;
   defaultDate?: string;
   lockCreditCard?: boolean;
-  onSubmit: (values: CreateTransactionInput | UpdateTransactionInput) => Promise<void>;
+  onSubmit: (
+    values: CreateTransactionInput | UpdateTransactionInput,
+  ) => Promise<boolean | undefined>;
 }
+
+const MODE_OPTIONS: Array<{ value: TransactionMode; label: string }> = [
+  { value: "single", label: "Avulsa" },
+  { value: "installment", label: "Parcelada" },
+  { value: "recurring", label: "Recorrente" },
+];
 
 function getDefaultValues(
   transaction?: Transaction,
@@ -60,6 +71,8 @@ function getDefaultValues(
       categoryId: null,
       creditCardId: options?.defaultCreditCardId ?? null,
       date: options?.defaultDate ?? getLocalIsoDate(),
+      mode: "single",
+      recurrenceCount: 12,
     };
   }
 
@@ -70,7 +83,13 @@ function getDefaultValues(
     categoryId: transaction.categoryId,
     creditCardId: transaction.creditCardId,
     date: transaction.date.slice(0, 10),
+    mode: "single",
+    recurrenceCount: 12,
   };
+}
+
+function getDefaultRecurrenceCount(mode: TransactionMode) {
+  return mode === "installment" ? 2 : 12;
 }
 
 export function TransactionFormDialog({
@@ -94,6 +113,7 @@ export function TransactionFormDialog({
   const transactionType = form.watch("type");
   const categoryId = form.watch("categoryId");
   const creditCardId = form.watch("creditCardId");
+  const mode = form.watch("mode");
 
   useEffect(() => {
     if (open) {
@@ -147,9 +167,18 @@ export function TransactionFormDialog({
         : values;
 
     try {
-      await onSubmit(payload);
+      const shouldClose = await onSubmit(payload);
+
+      if (shouldClose === false) {
+        return;
+      }
+
       toast.success(
-        isEditing ? "Transação atualizada com sucesso." : "Transação criada com sucesso.",
+        isEditing
+          ? "Transação atualizada com sucesso."
+          : values.mode === "single"
+            ? "Transação criada com sucesso."
+            : "Transações criadas com sucesso.",
       );
       onOpenChange(false);
     } catch (error) {
@@ -177,6 +206,44 @@ export function TransactionFormDialog({
           <form onSubmit={form.handleSubmit(handleSubmit)} className="flex min-h-0 flex-1 flex-col">
             <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-6">
               <div className="flex flex-col gap-4">
+                {!isEditing ? (
+                  <FormField
+                    control={form.control}
+                    name="mode"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel required>Modo</FormLabel>
+                        <FormControl>
+                          <div className="grid grid-cols-3 gap-2">
+                            {MODE_OPTIONS.map((option) => (
+                              <button
+                                key={option.value}
+                                type="button"
+                                onClick={() => {
+                                  field.onChange(option.value);
+                                  form.setValue(
+                                    "recurrenceCount",
+                                    getDefaultRecurrenceCount(option.value),
+                                  );
+                                }}
+                                className={cn(
+                                  "rounded-md border px-2 py-2 text-[13px] font-light transition-colors",
+                                  field.value === option.value
+                                    ? "border-primary bg-primary-subdued text-primary-deep"
+                                    : "border-hairline bg-canvas text-muted-foreground hover:bg-canvas-soft",
+                                )}
+                              >
+                                {option.label}
+                              </button>
+                            ))}
+                          </div>
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                ) : null}
+
                 <FormField
                   control={form.control}
                   name="description"
@@ -196,7 +263,7 @@ export function TransactionFormDialog({
                   name="amount"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel required>Valor</FormLabel>
+                      <FormLabel required>{getAmountLabel(mode, isEditing)}</FormLabel>
                       <FormControl>
                         <MoneyInput {...field} />
                       </FormControl>
@@ -204,6 +271,34 @@ export function TransactionFormDialog({
                     </FormItem>
                   )}
                 />
+
+                {!isEditing && mode !== "single" ? (
+                  <FormField
+                    control={form.control}
+                    name="recurrenceCount"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel required>{getRecurrenceCountLabel(mode)}</FormLabel>
+                        <FormControl>
+                          <Input
+                            type="number"
+                            min={2}
+                            max={48}
+                            inputMode="numeric"
+                            value={field.value ?? ""}
+                            onChange={(event) => {
+                              const parsed = Number(event.target.value);
+                              field.onChange(
+                                event.target.value === "" ? undefined : parsed,
+                              );
+                            }}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                ) : null}
 
                 {!lockCreditCard ? (
                   <FormField

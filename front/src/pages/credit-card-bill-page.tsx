@@ -13,6 +13,7 @@ import {
   TrendingUp,
   type LucideIcon,
 } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { BankLogo } from "@/components/bank-accounts/bank-logo";
@@ -22,7 +23,9 @@ import { CategoryIcon } from "@/components/categories/category-icon";
 import { CardBrandLogo } from "@/components/credit-cards/card-brand-logo";
 import { CreditCardFormDialog } from "@/components/credit-cards/credit-card-form-dialog";
 import { PageShell } from "@/components/layout/page-shell";
+import { SeriesScopeDialog } from "@/components/transactions/series-scope-dialog";
 import { TransactionFormDialog } from "@/components/transactions/transaction-form-dialog";
+import { TransactionSeriesBadge } from "@/components/transactions/transaction-series-badge";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -38,6 +41,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useBankAccounts } from "@/hooks/use-bank-accounts";
 import { useCategories } from "@/hooks/use-categories";
+import { useCreditCardBill } from "@/hooks/use-credit-card-bill";
 import { useAuth } from "@/providers/auth-provider";
 import { getBankLabel } from "@/lib/bank-logos";
 import { formatDueDayLabel, formatMaskedCardNumber } from "@/lib/card-brands";
@@ -53,15 +57,19 @@ import {
 } from "@/lib/category-budget";
 import { formatCents } from "@/lib/money";
 import { getTodayInMonth } from "@/lib/date";
+import { queryKeys } from "@/lib/query-keys";
 import { getUserDisplayName } from "@/lib/user-display";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import type { UpdateCreditCardInput } from "@/schemas/credit-card.schema";
-import type { CreateTransactionInput, UpdateTransactionInput } from "@/schemas/transaction.schema";
+import type {
+  ApplyScope,
+  CreateTransactionInput,
+  UpdateTransactionInput,
+} from "@/schemas/transaction.schema";
 import type { UpdateCategoryInput } from "@/schemas/category.schema";
 import {
   type CreditCard,
-  type CreditCardBill,
   type CreditCardBillTransaction,
   creditCardsService,
 } from "@/services/credit-cards";
@@ -72,12 +80,6 @@ const MONTH_LABELS = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "S
 
 function formatMonthYearLabel(month: number, year: number) {
   return `${MONTH_LABELS[month]}/${String(year).slice(-2)}`;
-}
-
-function toReferenceDateParam(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  return `${year}-${month}-15`;
 }
 
 function shiftMonth(date: Date, offset: number) {
@@ -98,12 +100,21 @@ function toEditableTransaction(
     type: "expense",
     categoryId: billTransaction.category?.id ?? null,
     creditCardId,
+    seriesId: billTransaction.seriesId,
+    seriesKind: billTransaction.seriesKind,
+    seriesIndex: billTransaction.seriesIndex,
+    seriesTotal: billTransaction.seriesTotal,
     category: billTransaction.category,
     date: billTransaction.date,
     createdAt: "",
     updatedAt: "",
   };
 }
+
+type PendingBillEdit = {
+  transaction: Transaction;
+  values: UpdateTransactionInput;
+};
 
 function sortBillTransactions(
   transactions: CreditCardBillTransaction[],
@@ -485,14 +496,13 @@ function BillLoadingSkeleton() {
 
 export function CreditCardBillPage() {
   const { id } = useParams<{ id: string }>();
+  const queryClient = useQueryClient();
   const { user } = useAuth();
   const { categories, updateCategory } = useCategories();
   const { accounts } = useBankAccounts();
-  const [bill, setBill] = useState<CreditCardBill | undefined>();
   const [referenceDate, setReferenceDate] = useState(() => new Date());
-  const [isLoading, setIsLoading] = useState(true);
-  const [isBillLoading, setIsBillLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { bill, isLoading, isBillLoading, error: billQueryError } = useCreditCardBill(id, referenceDate);
+  const error = !id ? "Cartão inválido." : billQueryError;
   const [searchQuery, setSearchQuery] = useState("");
   const [sortColumn, setSortColumn] = useState<BillTransactionSortColumn>("date");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
@@ -504,69 +514,22 @@ export function CreditCardBillPage() {
   const [deletingTransaction, setDeletingTransaction] = useState<
     CreditCardBillTransaction | undefined
   >();
+  const [pendingEdit, setPendingEdit] = useState<PendingBillEdit | undefined>();
+  const [scopeDialogMode, setScopeDialogMode] = useState<"edit" | "delete" | null>(null);
+  const [isScopeSubmitting, setIsScopeSubmitting] = useState(false);
   const [currentOpenBillMonth, setCurrentOpenBillMonth] = useState<{
     month: number;
     year: number;
     cycleEnd: string;
   } | null>(null);
 
-  const refreshBill = useCallback(async () => {
-    if (!id) {
-      return;
-    }
-
-    try {
-      const data = await creditCardsService.getBill(id, {
-        referenceDate: toReferenceDateParam(referenceDate),
-      });
-      setBill(data);
-      setError(null);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Erro ao carregar fatura.";
-      setError(message);
-    }
-  }, [id, referenceDate]);
-
-  useEffect(() => {
-    if (!id) {
-      setError("Cartão inválido.");
-      setIsLoading(false);
-      return;
-    }
-
-    let cancelled = false;
-
-    const loadBill = async () => {
-      setIsBillLoading(true);
-      setError(null);
-
-      try {
-        const data = await creditCardsService.getBill(id, {
-          referenceDate: toReferenceDateParam(referenceDate),
-        });
-
-        if (!cancelled) {
-          setBill(data);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          const message = err instanceof Error ? err.message : "Erro ao carregar fatura.";
-          setError(message);
-        }
-      } finally {
-        if (!cancelled) {
-          setIsLoading(false);
-          setIsBillLoading(false);
-        }
-      }
-    };
-
-    void loadBill();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [id, referenceDate]);
+  const invalidateBillData = useCallback(() => {
+    return Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.creditCards.all }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.transactions.all }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.categories.all }),
+    ]);
+  }, [queryClient]);
 
   useEffect(() => {
     setCurrentOpenBillMonth(null);
@@ -619,7 +582,7 @@ export function CreditCardBillPage() {
     }
 
     await creditCardsService.update(creditCard.id, values);
-    await refreshBill();
+    await invalidateBillData();
   };
 
   const openEditCategory = (categoryId: string) => {
@@ -639,7 +602,7 @@ export function CreditCardBillPage() {
     }
 
     await updateCategory(editingCategory.id, values);
-    await refreshBill();
+    await invalidateBillData();
   };
 
   const openCreate = () => {
@@ -668,12 +631,47 @@ export function CreditCardBillPage() {
     };
 
     if (editingTransaction) {
+      if (editingTransaction.seriesId) {
+        setPendingEdit({ transaction: editingTransaction, values: payload });
+        setScopeDialogMode("edit");
+        setTransactionFormOpen(false);
+        return false;
+      }
+
       await transactionsService.update(editingTransaction.id, payload);
+      setEditingTransaction(undefined);
     } else {
       await transactionsService.create(payload);
     }
 
-    await refreshBill();
+    await invalidateBillData();
+  };
+
+  const handleScopeConfirm = async (scope: ApplyScope) => {
+    setIsScopeSubmitting(true);
+
+    try {
+      if (scopeDialogMode === "edit" && pendingEdit) {
+        await transactionsService.update(pendingEdit.transaction.id, pendingEdit.values, scope);
+        toast.success("Transação atualizada com sucesso.");
+        setPendingEdit(undefined);
+        setEditingTransaction(undefined);
+      }
+
+      if (scopeDialogMode === "delete" && deletingTransaction) {
+        await transactionsService.delete(deletingTransaction.id, scope);
+        toast.success("Transação removida com sucesso.");
+        setDeletingTransaction(undefined);
+      }
+
+      setScopeDialogMode(null);
+      await invalidateBillData();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Não foi possível concluir a operação.";
+      toast.error(message);
+    } finally {
+      setIsScopeSubmitting(false);
+    }
   };
 
   const handleDeleteTransaction = async () => {
@@ -685,11 +683,21 @@ export function CreditCardBillPage() {
       await transactionsService.delete(deletingTransaction.id);
       toast.success("Transação removida com sucesso.");
       setDeletingTransaction(undefined);
-      await refreshBill();
+      await invalidateBillData();
     } catch (err) {
       const message = err instanceof Error ? err.message : "Não foi possível excluir a transação.";
       toast.error(message);
     }
+  };
+
+  const requestDeleteTransaction = (transaction: CreditCardBillTransaction) => {
+    if (transaction.seriesId) {
+      setDeletingTransaction(transaction);
+      setScopeDialogMode("delete");
+      return;
+    }
+
+    setDeletingTransaction(transaction);
   };
 
   const filteredTransactions = useMemo(() => {
@@ -905,7 +913,11 @@ export function CreditCardBillPage() {
                                 size="icon"
                                 className="size-6 shrink-0 opacity-0 transition-opacity group-hover/category:opacity-100 focus-visible:opacity-100"
                                 aria-label={`Editar ${category.name}`}
-                                onClick={() => openEditCategory(category.categoryId)}
+                                onClick={() => {
+                                  if (category.categoryId) {
+                                    openEditCategory(category.categoryId);
+                                  }
+                                }}
                               >
                                 <Pencil className="size-3.5" />
                               </Button>
@@ -1157,9 +1169,12 @@ export function CreditCardBillPage() {
                                   {transaction.description.charAt(0).toUpperCase()}
                                 </span>
                               )}
-                              <span className="truncate text-[15px] font-normal text-ink">
-                                {transaction.description}
-                              </span>
+                              <div className="flex min-w-0 flex-col gap-1">
+                                <span className="truncate text-[15px] font-normal text-ink">
+                                  {transaction.description}
+                                </span>
+                                <TransactionSeriesBadge transaction={transaction} />
+                              </div>
                             </div>
                           </td>
                           <td className="hidden px-4 py-3 sm:table-cell">
@@ -1202,7 +1217,7 @@ export function CreditCardBillPage() {
                                 size="icon"
                                 className="size-8"
                                 aria-label={`Excluir ${transaction.description}`}
-                                onClick={() => setDeletingTransaction(transaction)}
+                                onClick={() => requestDeleteTransaction(transaction)}
                               >
                                 <Trash2 className="size-4" />
                               </Button>
@@ -1263,8 +1278,28 @@ export function CreditCardBillPage() {
         onSubmit={handleSubmitCategory}
       />
 
+      {scopeDialogMode && (pendingEdit?.transaction.description ?? deletingTransaction?.description) ? (
+        <SeriesScopeDialog
+          open={Boolean(scopeDialogMode)}
+          onOpenChange={(open) => {
+            if (!open) {
+              setScopeDialogMode(null);
+              setPendingEdit(undefined);
+            }
+          }}
+          mode={scopeDialogMode}
+          description={
+            scopeDialogMode === "edit"
+              ? (pendingEdit?.transaction.description ?? "")
+              : (deletingTransaction?.description ?? "")
+          }
+          onConfirm={(scope) => void handleScopeConfirm(scope)}
+          isSubmitting={isScopeSubmitting}
+        />
+      ) : null}
+
       <AlertDialog
-        open={Boolean(deletingTransaction)}
+        open={Boolean(deletingTransaction) && !deletingTransaction?.seriesId}
         onOpenChange={(open) => {
           if (!open) {
             setDeletingTransaction(undefined);

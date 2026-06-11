@@ -3,6 +3,7 @@ import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { transactionController } from "@/controllers/index.js";
 import {
   createTransactionSchema,
+  deleteTransactionSchema,
   listTransactionsSchema,
   transactionIdSchema,
   updateTransactionSchema,
@@ -36,7 +37,7 @@ export async function transactionRoutes(app: FastifyInstance) {
   });
 
   typedApp.delete("/transactions/:id", {
-    schema: transactionIdSchema,
+    schema: deleteTransactionSchema,
     preHandler: [app.authenticate],
     handler: transactionController.delete,
   });
