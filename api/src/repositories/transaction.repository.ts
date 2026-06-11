@@ -1,5 +1,6 @@
 import { and, count, desc, eq, gte, inArray, isNotNull, sql, sum } from "drizzle-orm";
 import { db } from "@/db/index.js";
+import { formatDateInTimezone, getCurrentMonthStartDateString } from "@/lib/credit-card-billing.js";
 import { categories } from "@/models/schema/categories.js";
 import { creditCards } from "@/models/schema/credit-cards.js";
 import {
@@ -155,10 +156,11 @@ export class TransactionRepository {
     return result?.total ?? 0;
   }
 
-  async listExpensesByCreditCardForCurrentCycle(
+  async listExpensesByCreditCardForCycle(
     userId: string,
     creditCardId: string,
     cycleStart: Date,
+    cycleEnd: Date,
   ) {
     const rows = await db
       .select({
@@ -186,7 +188,7 @@ export class TransactionRepository {
           eq(transactions.creditCardId, creditCardId),
           eq(transactions.type, "expense"),
           gte(transactions.date, cycleStart),
-          sql`timezone('America/Sao_Paulo', ${transactions.date})::date <= timezone('America/Sao_Paulo', now())::date`,
+          sql`timezone('America/Sao_Paulo', ${transactions.date})::date <= ${formatDateInTimezone(cycleEnd)}::date`,
         ),
       )
       .orderBy(desc(transactions.date));
@@ -194,10 +196,11 @@ export class TransactionRepository {
     return rows.map(mapRow);
   }
 
-  async sumExpensesByCreditCardForCurrentCycle(
+  async sumExpensesByCreditCardForCycle(
     userId: string,
     creditCardId: string,
     cycleStart: Date,
+    cycleEnd: Date,
   ) {
     const [result] = await db
       .select({ total: sum(transactions.amount) })
@@ -208,27 +211,95 @@ export class TransactionRepository {
           eq(transactions.creditCardId, creditCardId),
           eq(transactions.type, "expense"),
           gte(transactions.date, cycleStart),
-          sql`timezone('America/Sao_Paulo', ${transactions.date})::date <= timezone('America/Sao_Paulo', now())::date`,
+          sql`timezone('America/Sao_Paulo', ${transactions.date})::date <= ${formatDateInTimezone(cycleEnd)}::date`,
         ),
       );
 
     return Number(result?.total ?? 0);
   }
 
+  async listExpensesByCreditCardForCurrentCycle(
+    userId: string,
+    creditCardId: string,
+    cycleStart: Date,
+    cycleEnd: Date,
+  ) {
+    return this.listExpensesByCreditCardForCycle(userId, creditCardId, cycleStart, cycleEnd);
+  }
+
+  async sumExpensesByCreditCardForCurrentCycle(
+    userId: string,
+    creditCardId: string,
+    cycleStart: Date,
+    cycleEnd: Date,
+  ) {
+    return this.sumExpensesByCreditCardForCycle(userId, creditCardId, cycleStart, cycleEnd);
+  }
+
+  async sumExpensesByCreditCardFromCurrentMonthOnward(userId: string, creditCardId: string) {
+    const currentMonthStart = getCurrentMonthStartDateString();
+
+    const [result] = await db
+      .select({ total: sum(transactions.amount) })
+      .from(transactions)
+      .where(
+        and(
+          eq(transactions.userId, userId),
+          eq(transactions.creditCardId, creditCardId),
+          eq(transactions.type, "expense"),
+          sql`timezone('America/Sao_Paulo', ${transactions.date})::date >= ${currentMonthStart}::date`,
+        ),
+      );
+
+    return Number(result?.total ?? 0);
+  }
+
+  async sumExpensesByCreditCardsFromCurrentMonthOnward(userId: string, creditCardIds: string[]) {
+    if (creditCardIds.length === 0) {
+      return new Map<string, number>();
+    }
+
+    const currentMonthStart = getCurrentMonthStartDateString();
+
+    const rows = await db
+      .select({
+        creditCardId: transactions.creditCardId,
+        total: sum(transactions.amount),
+      })
+      .from(transactions)
+      .where(
+        and(
+          eq(transactions.userId, userId),
+          eq(transactions.type, "expense"),
+          inArray(transactions.creditCardId, creditCardIds),
+          isNotNull(transactions.creditCardId),
+          sql`timezone('America/Sao_Paulo', ${transactions.date})::date >= ${currentMonthStart}::date`,
+        ),
+      )
+      .groupBy(transactions.creditCardId);
+
+    return new Map(
+      rows
+        .filter((row) => row.creditCardId != null)
+        .map((row) => [row.creditCardId as string, Number(row.total ?? 0)]),
+    );
+  }
+
   async sumExpensesByCreditCardsForCurrentCycles(
     userId: string,
-    cycles: Array<{ creditCardId: string; cycleStart: Date }>,
+    cycles: Array<{ creditCardId: string; cycleStart: Date; cycleEnd: Date }>,
   ) {
     if (cycles.length === 0) {
       return new Map<string, number>();
     }
 
     const results = await Promise.all(
-      cycles.map(async ({ creditCardId, cycleStart }) => {
+      cycles.map(async ({ creditCardId, cycleStart, cycleEnd }) => {
         const total = await this.sumExpensesByCreditCardForCurrentCycle(
           userId,
           creditCardId,
           cycleStart,
+          cycleEnd,
         );
         return [creditCardId, total] as const;
       }),

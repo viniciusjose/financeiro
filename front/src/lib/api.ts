@@ -13,7 +13,9 @@ class ApiClient {
     const token = getAccessToken();
     const headers = new Headers(options.headers);
 
-    headers.set("Content-Type", "application/json");
+    if (options.body != null && options.body !== "") {
+      headers.set("Content-Type", "application/json");
+    }
 
     if (token) {
       headers.set("Authorization", `Bearer ${token}`);

@@ -7,6 +7,16 @@ export function getLocalIsoDate(date = new Date()): string {
   return `${year}-${month}-${day}`;
 }
 
+/** Aplica o dia de hoje ao mês/ano de referência (ajusta meses com menos dias). */
+export function getTodayInMonth(referenceMonth: Date, today = new Date()): string {
+  const year = referenceMonth.getFullYear();
+  const month = referenceMonth.getMonth();
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  const day = Math.min(today.getDate(), lastDay);
+
+  return getLocalIsoDate(new Date(year, month, day));
+}
+
 /** Converte YYYY-MM-DD em Date no calendário local. */
 export function parseLocalIsoDate(value: string): Date | undefined {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);

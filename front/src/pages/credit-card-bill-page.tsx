@@ -9,20 +9,34 @@ import {
   Pencil,
   Plus,
   Search,
+  Trash2,
   TrendingUp,
   type LucideIcon,
 } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { BankLogo } from "@/components/bank-accounts/bank-logo";
+import { CategoryFormDialog } from "@/components/categories/category-form-dialog";
 import { CategoryBadge } from "@/components/categories/category-badge";
 import { CategoryIcon } from "@/components/categories/category-icon";
 import { CardBrandLogo } from "@/components/credit-cards/card-brand-logo";
+import { CreditCardFormDialog } from "@/components/credit-cards/credit-card-form-dialog";
 import { PageShell } from "@/components/layout/page-shell";
 import { TransactionFormDialog } from "@/components/transactions/transaction-form-dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useBankAccounts } from "@/hooks/use-bank-accounts";
 import { useCategories } from "@/hooks/use-categories";
 import { useAuth } from "@/providers/auth-provider";
 import { getBankLabel } from "@/lib/bank-logos";
@@ -30,12 +44,21 @@ import { formatDueDayLabel, formatMaskedCardNumber } from "@/lib/card-brands";
 import {
   formatCreditLimitUsedPercent,
   getAvailableLimitCents,
+  getCreditCardLimitUsedCents,
   getCreditLimitUsedPercent,
 } from "@/lib/credit-card-limit";
+import {
+  formatBudgetUsedPercent,
+  getBudgetUsedPercent,
+} from "@/lib/category-budget";
 import { formatCents } from "@/lib/money";
+import { getTodayInMonth } from "@/lib/date";
 import { getUserDisplayName } from "@/lib/user-display";
+import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import type { UpdateCreditCardInput } from "@/schemas/credit-card.schema";
 import type { CreateTransactionInput, UpdateTransactionInput } from "@/schemas/transaction.schema";
+import type { UpdateCategoryInput } from "@/schemas/category.schema";
 import {
   type CreditCard,
   type CreditCardBill,
@@ -43,8 +66,23 @@ import {
   creditCardsService,
 } from "@/services/credit-cards";
 import { type Transaction, transactionsService } from "@/services/transactions";
+import type { Category } from "@/services/categories";
 
 const MONTH_LABELS = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+
+function formatMonthYearLabel(month: number, year: number) {
+  return `${MONTH_LABELS[month]}/${String(year).slice(-2)}`;
+}
+
+function toReferenceDateParam(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  return `${year}-${month}-15`;
+}
+
+function shiftMonth(date: Date, offset: number) {
+  return new Date(date.getFullYear(), date.getMonth() + offset, 1);
+}
 
 type BillTransactionSortColumn = "category" | "date" | "amount";
 type SortDirection = "asc" | "desc";
@@ -146,19 +184,36 @@ function isBillOverdue(cycleEnd: string, dueDay: number) {
   return now > dueDate;
 }
 
-function getMonthNavigatorMonths(referenceDate: string) {
-  const date = new Date(referenceDate);
-  const centerMonth = date.getMonth();
-  const centerYear = date.getFullYear();
-  const months: { label: string; month: number; year: number; isCurrent: boolean }[] = [];
+type NavigatorMonth = {
+  label: string;
+  month: number;
+  year: number;
+  isSelected: boolean;
+  isCurrentOpenBill: boolean;
+};
+
+function getMonthNavigatorMonths(
+  referenceDate: Date,
+  currentOpenBillMonth: { month: number; year: number } | null,
+): NavigatorMonth[] {
+  const centerMonth = referenceDate.getMonth();
+  const centerYear = referenceDate.getFullYear();
+  const months: NavigatorMonth[] = [];
 
   for (let offset = -2; offset <= 2; offset += 1) {
     const monthDate = new Date(centerYear, centerMonth + offset, 1);
+    const month = monthDate.getMonth();
+    const year = monthDate.getFullYear();
+
     months.push({
-      label: MONTH_LABELS[monthDate.getMonth()],
-      month: monthDate.getMonth(),
-      year: monthDate.getFullYear(),
-      isCurrent: offset === 0,
+      label: formatMonthYearLabel(month, year),
+      month,
+      year,
+      isSelected: offset === 0,
+      isCurrentOpenBill:
+        currentOpenBillMonth != null &&
+        month === currentOpenBillMonth.month &&
+        year === currentOpenBillMonth.year,
     });
   }
 
@@ -168,7 +223,13 @@ function getMonthNavigatorMonths(referenceDate: string) {
 function aggregateByCategory(transactions: CreditCardBillTransaction[]) {
   const totals = new Map<
     string,
-    { name: string; color: string; icon: string; totalCents: number }
+    {
+      categoryId: string | null;
+      name: string;
+      color: string;
+      icon: string;
+      totalCents: number;
+    }
   >();
 
   for (const transaction of transactions) {
@@ -181,6 +242,7 @@ function aggregateByCategory(transactions: CreditCardBillTransaction[]) {
     }
 
     totals.set(key, {
+      categoryId: transaction.category?.id ?? null,
       name: transaction.category?.name ?? "Sem categoria",
       color: transaction.category?.color ?? "#64748d",
       icon: transaction.category?.icon ?? "circle",
@@ -191,7 +253,15 @@ function aggregateByCategory(transactions: CreditCardBillTransaction[]) {
   return [...totals.values()].sort((a, b) => b.totalCents - a.totalCents);
 }
 
-function BillCardVisual({ creditCard, cardholderName }: { creditCard: CreditCard; cardholderName: string }) {
+function BillCardVisual({
+  creditCard,
+  cardholderName,
+  onEdit,
+}: {
+  creditCard: CreditCard;
+  cardholderName: string;
+  onEdit: () => void;
+}) {
   const cardColor = creditCard.color ?? "#533afd";
   const bankLabel = getBankLabel(creditCard.bankAccount.bank, creditCard.bankAccount.bankName);
 
@@ -211,7 +281,19 @@ function BillCardVisual({ creditCard, cardholderName }: { creditCard: CreditCard
             className="brightness-0 invert"
           />
         )}
-        <CardBrandLogo brand={creditCard.brand} brandName={creditCard.brandName} size="sm" />
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-7 text-white/80 hover:bg-white/15 hover:text-white"
+            onClick={onEdit}
+            aria-label="Editar cartão"
+          >
+            <Pencil className="size-3.5" />
+          </Button>
+          <CardBrandLogo brand={creditCard.brand} brandName={creditCard.brandName} size="sm" />
+        </div>
       </div>
 
       <p className="mt-4 tabular-money text-[15px] tracking-[0.12em]">
@@ -258,9 +340,13 @@ function BillSidebarCard({
 function BillLimitProgress({
   spentCents,
   limitCents,
+  label = "Usado",
+  className,
 }: {
   spentCents: number;
   limitCents: number;
+  label?: string;
+  className?: string;
 }) {
   const percent = getCreditLimitUsedPercent(spentCents, limitCents);
   const fillPercent = Math.min(percent, 100);
@@ -268,10 +354,19 @@ function BillLimitProgress({
     percent >= 100 ? "bg-destructive" : percent >= 80 ? "bg-amber-500" : "bg-primary";
 
   return (
-    <div className="mt-3">
+    <div className={cn("mt-3", className)}>
       <div className="mb-1.5 flex items-center justify-between gap-2 text-[12px] font-light text-ink-mute">
-        <span>Usado</span>
-        <span className="tabular-money text-ink-secondary">
+        <span>{label}</span>
+        <span
+          className={cn(
+            "tabular-money",
+            percent >= 100
+              ? "text-destructive"
+              : percent >= 80
+                ? "text-amber-600"
+                : "text-ink-secondary",
+          )}
+        >
           {formatCreditLimitUsedPercent(spentCents, limitCents)}
         </span>
       </div>
@@ -292,30 +387,70 @@ function BillLimitProgress({
   );
 }
 
+type BillStatCardTone = "primary" | "expense" | "insight";
+
+const billStatCardToneStyles: Record<
+  BillStatCardTone,
+  { card: string; icon: string; detail?: string }
+> = {
+  primary: {
+    card: "border-primary/20 bg-primary/[0.05]",
+    icon: "bg-primary/12 text-primary",
+  },
+  expense: {
+    card: "border-destructive/20 bg-destructive/[0.04]",
+    icon: "bg-destructive/10 text-destructive",
+    detail: "text-destructive/80",
+  },
+  insight: {
+    card: "border-hairline-input/50 bg-canvas-soft",
+    icon: "bg-ink/[0.06] text-ink-secondary",
+  },
+};
+
 function BillStatCard({
   icon: Icon,
   label,
   value,
   detail,
   detailClassName,
+  tone = "insight",
 }: {
   icon: LucideIcon;
   label: string;
   value: string;
   detail?: string;
   detailClassName?: string;
+  tone?: BillStatCardTone;
 }) {
+  const toneStyle = billStatCardToneStyles[tone];
+
   return (
-    <div className="rounded-lg border border-hairline bg-canvas px-4 py-3.5 shadow-[var(--shadow-card)]">
+    <div
+      className={cn(
+        "rounded-lg border px-4 py-3.5",
+        toneStyle.card,
+      )}
+    >
       <div className="flex items-start gap-2.5">
-        <span className="inline-flex size-8 shrink-0 items-center justify-center rounded-md bg-canvas-soft text-ink-mute">
+        <span
+          className={cn(
+            "inline-flex size-8 shrink-0 items-center justify-center rounded-md",
+            toneStyle.icon,
+          )}
+        >
           <Icon className="size-4" aria-hidden="true" />
         </span>
         <div className="min-w-0">
           <p className="text-[12px] font-light text-ink-mute">{label}</p>
           <p className="tabular-money mt-0.5 text-[20px] font-normal text-ink">{value}</p>
           {detail ? (
-            <p className={cn("mt-0.5 text-[12px] font-light", detailClassName ?? "text-ink-mute")}>
+            <p
+              className={cn(
+                "mt-0.5 truncate text-[12px] font-light",
+                detailClassName ?? toneStyle.detail ?? "text-ink-mute",
+              )}
+            >
               {detail}
             </p>
           ) : null}
@@ -351,15 +486,29 @@ function BillLoadingSkeleton() {
 export function CreditCardBillPage() {
   const { id } = useParams<{ id: string }>();
   const { user } = useAuth();
-  const { categories } = useCategories();
+  const { categories, updateCategory } = useCategories();
+  const { accounts } = useBankAccounts();
   const [bill, setBill] = useState<CreditCardBill | undefined>();
+  const [referenceDate, setReferenceDate] = useState(() => new Date());
   const [isLoading, setIsLoading] = useState(true);
+  const [isBillLoading, setIsBillLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [sortColumn, setSortColumn] = useState<BillTransactionSortColumn>("date");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [transactionFormOpen, setTransactionFormOpen] = useState(false);
+  const [creditCardFormOpen, setCreditCardFormOpen] = useState(false);
+  const [categoryFormOpen, setCategoryFormOpen] = useState(false);
+  const [editingCategory, setEditingCategory] = useState<Category | undefined>();
   const [editingTransaction, setEditingTransaction] = useState<Transaction | undefined>();
+  const [deletingTransaction, setDeletingTransaction] = useState<
+    CreditCardBillTransaction | undefined
+  >();
+  const [currentOpenBillMonth, setCurrentOpenBillMonth] = useState<{
+    month: number;
+    year: number;
+    cycleEnd: string;
+  } | null>(null);
 
   const refreshBill = useCallback(async () => {
     if (!id) {
@@ -367,14 +516,16 @@ export function CreditCardBillPage() {
     }
 
     try {
-      const data = await creditCardsService.getBill(id);
+      const data = await creditCardsService.getBill(id, {
+        referenceDate: toReferenceDateParam(referenceDate),
+      });
       setBill(data);
       setError(null);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Erro ao carregar fatura.";
       setError(message);
     }
-  }, [id]);
+  }, [id, referenceDate]);
 
   useEffect(() => {
     if (!id) {
@@ -386,11 +537,13 @@ export function CreditCardBillPage() {
     let cancelled = false;
 
     const loadBill = async () => {
-      setIsLoading(true);
+      setIsBillLoading(true);
       setError(null);
 
       try {
-        const data = await creditCardsService.getBill(id);
+        const data = await creditCardsService.getBill(id, {
+          referenceDate: toReferenceDateParam(referenceDate),
+        });
 
         if (!cancelled) {
           setBill(data);
@@ -403,6 +556,7 @@ export function CreditCardBillPage() {
       } finally {
         if (!cancelled) {
           setIsLoading(false);
+          setIsBillLoading(false);
         }
       }
     };
@@ -412,20 +566,81 @@ export function CreditCardBillPage() {
     return () => {
       cancelled = true;
     };
+  }, [id, referenceDate]);
+
+  useEffect(() => {
+    setCurrentOpenBillMonth(null);
   }, [id]);
+
+  useEffect(() => {
+    if (!bill?.isCurrentOpenCycle) {
+      return;
+    }
+
+    const cycleEndDate = new Date(bill.cycleEnd);
+    setCurrentOpenBillMonth({
+      month: cycleEndDate.getMonth(),
+      year: cycleEndDate.getFullYear(),
+      cycleEnd: bill.cycleEnd,
+    });
+  }, [bill?.cycleEnd, bill?.isCurrentOpenCycle]);
+
+  const selectMonth = useCallback((month: number, year: number) => {
+    setReferenceDate(new Date(year, month, 1));
+  }, []);
+
+  const shiftSelectedMonth = useCallback((offset: number) => {
+    setReferenceDate((current) => shiftMonth(current, offset));
+  }, []);
 
   const creditCard = bill?.creditCard;
   const totalSpentCents = bill?.totalSpentCents ?? 0;
+  const currentOpenBillSpentCents = creditCard?.currentBillSpentCents ?? 0;
+  const limitUsedCents = creditCard ? getCreditCardLimitUsedCents(creditCard) : 0;
   const creditLimitCents = creditCard?.creditLimitCents ?? null;
-  const availableLimitCents =
-    creditLimitCents != null ? getAvailableLimitCents(creditLimitCents, totalSpentCents) : null;
-  const limitPercent =
+  const currentOpenAvailableLimitCents =
+    creditLimitCents != null ? getAvailableLimitCents(creditLimitCents, limitUsedCents) : null;
+  const currentOpenLimitPercent =
     creditLimitCents != null && creditLimitCents > 0
-      ? getCreditLimitUsedPercent(totalSpentCents, creditLimitCents)
+      ? getCreditLimitUsedPercent(limitUsedCents, creditLimitCents)
       : null;
 
   const cardholderName = getUserDisplayName(user?.name, user?.email).toUpperCase();
   const canCreateTransaction = Boolean(creditCard?.isActive && !creditCard?.isBlocked);
+  const activeAccounts = useMemo(() => accounts.filter((account) => account.isActive), [accounts]);
+
+  const openEditCreditCard = () => {
+    setCreditCardFormOpen(true);
+  };
+
+  const handleSubmitCreditCard = async (values: UpdateCreditCardInput) => {
+    if (!creditCard) {
+      return;
+    }
+
+    await creditCardsService.update(creditCard.id, values);
+    await refreshBill();
+  };
+
+  const openEditCategory = (categoryId: string) => {
+    const category = categories.find((item) => item.id === categoryId);
+
+    if (!category) {
+      return;
+    }
+
+    setEditingCategory(category);
+    setCategoryFormOpen(true);
+  };
+
+  const handleSubmitCategory = async (values: UpdateCategoryInput) => {
+    if (!editingCategory) {
+      return;
+    }
+
+    await updateCategory(editingCategory.id, values);
+    await refreshBill();
+  };
 
   const openCreate = () => {
     setEditingTransaction(undefined);
@@ -461,6 +676,22 @@ export function CreditCardBillPage() {
     await refreshBill();
   };
 
+  const handleDeleteTransaction = async () => {
+    if (!deletingTransaction) {
+      return;
+    }
+
+    try {
+      await transactionsService.delete(deletingTransaction.id);
+      toast.success("Transação removida com sucesso.");
+      setDeletingTransaction(undefined);
+      await refreshBill();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Não foi possível excluir a transação.";
+      toast.error(message);
+    }
+  };
+
   const filteredTransactions = useMemo(() => {
     if (!bill) {
       return [];
@@ -494,10 +725,23 @@ export function CreditCardBillPage() {
     setSortDirection(column === "date" ? "desc" : "asc");
   };
 
-  const categoryBreakdown = useMemo(
-    () => (bill ? aggregateByCategory(bill.transactions) : []),
-    [bill],
-  );
+  const categoryBreakdown = useMemo(() => {
+    if (!bill) {
+      return [];
+    }
+
+    const categoriesById = new Map(categories.map((category) => [category.id, category]));
+
+    return aggregateByCategory(bill.transactions).map((item) => {
+      const category = item.categoryId ? categoriesById.get(item.categoryId) : undefined;
+
+      return {
+        ...item,
+        spendingLimitCents: category?.spendingLimitCents ?? null,
+        monthSpentCents: category?.monthSpentCents ?? null,
+      };
+    });
+  }, [bill, categories]);
 
   const largestTransaction = useMemo(() => {
     if (!bill || bill.transactions.length === 0) {
@@ -518,16 +762,23 @@ export function CreditCardBillPage() {
   }, [bill, totalSpentCents]);
 
   const monthNavigator = useMemo(
-    () => (bill ? getMonthNavigatorMonths(bill.cycleEnd) : []),
-    [bill],
+    () => getMonthNavigatorMonths(referenceDate, currentOpenBillMonth),
+    [currentOpenBillMonth, referenceDate],
+  );
+  const defaultTransactionDate = useMemo(
+    () => getTodayInMonth(referenceDate),
+    [referenceDate],
   );
 
-  const isOverdue = bill && creditCard ? isBillOverdue(bill.cycleEnd, creditCard.dueDay) : false;
+  const isCurrentOpenBillOverdue =
+    creditCard && currentOpenBillMonth
+      ? isBillOverdue(currentOpenBillMonth.cycleEnd, creditCard.dueDay)
+      : false;
 
   return (
     <>
       <PageShell className="max-w-7xl">
-      {isLoading ? <BillLoadingSkeleton /> : null}
+      {isLoading && !bill ? <BillLoadingSkeleton /> : null}
 
       {!isLoading && error ? (
         <div className="rounded-lg border border-hairline bg-canvas p-6 text-[15px] font-light text-muted-foreground shadow-[var(--shadow-card)]">
@@ -538,7 +789,11 @@ export function CreditCardBillPage() {
       {!isLoading && !error && bill && creditCard ? (
         <div className="grid gap-6 lg:grid-cols-[minmax(17rem,20rem)_1fr]">
           <aside className="space-y-3">
-            <BillCardVisual creditCard={creditCard} cardholderName={cardholderName} />
+            <BillCardVisual
+              creditCard={creditCard}
+              cardholderName={cardholderName}
+              onEdit={openEditCreditCard}
+            />
 
             <BillSidebarCard>
               <div className="flex items-start gap-2.5">
@@ -548,18 +803,15 @@ export function CreditCardBillPage() {
                 <div className="min-w-0 flex-1">
                   <p className="text-[13px] font-normal text-ink-mute">Fatura do mês</p>
                   <p className="tabular-money mt-0.5 text-[26px] font-normal text-ink">
-                    {formatCents(totalSpentCents)}
+                    {formatCents(currentOpenBillSpentCents)}
                   </p>
-                  {isOverdue ? (
+                  {isCurrentOpenBillOverdue ? (
                     <p className="mt-0.5 text-[12px] font-normal text-amber-600">Fatura vencida</p>
                   ) : (
                     <p className="mt-0.5 text-[12px] font-light text-ink-mute">Em aberto</p>
                   )}
                 </div>
               </div>
-              {creditLimitCents != null && creditLimitCents > 0 ? (
-                <BillLimitProgress spentCents={totalSpentCents} limitCents={creditLimitCents} />
-              ) : null}
             </BillSidebarCard>
 
             <BillSidebarCard
@@ -582,36 +834,27 @@ export function CreditCardBillPage() {
                   <dd
                     className={cn(
                       "tabular-money font-normal",
-                      availableLimitCents != null && availableLimitCents <= 0
+                      currentOpenAvailableLimitCents != null && currentOpenAvailableLimitCents <= 0
                         ? "text-destructive"
                         : "text-emerald-600",
                     )}
                   >
-                    {formatCents(availableLimitCents ?? 0)}
+                    {formatCents(currentOpenAvailableLimitCents ?? 0)}
                   </dd>
                 </div>
                 <div className="flex items-center justify-between gap-3 text-[13px]">
                   <dt className="font-light text-ink-mute">Vencimento</dt>
                   <dd className="font-normal text-ink">{formatDueDayLabel(creditCard.dueDay)}</dd>
                 </div>
-                {limitPercent != null && creditLimitCents != null ? (
-                  <div className="flex items-center justify-between gap-3 text-[13px]">
-                    <dt className="font-light text-ink-mute">Uso do limite</dt>
-                    <dd
-                      className={cn(
-                        "tabular-money font-normal",
-                        limitPercent >= 100
-                          ? "text-destructive"
-                          : limitPercent >= 80
-                            ? "text-amber-600"
-                            : "text-ink-secondary",
-                      )}
-                    >
-                      {formatCreditLimitUsedPercent(totalSpentCents, creditLimitCents)}
-                    </dd>
-                  </div>
-                ) : null}
               </dl>
+              {currentOpenLimitPercent != null && creditLimitCents != null ? (
+                <BillLimitProgress
+                  spentCents={limitUsedCents}
+                  limitCents={creditLimitCents}
+                  label="Uso do limite"
+                  className="mt-2.5"
+                />
+              ) : null}
             </BillSidebarCard>
 
             {categoryBreakdown.length > 0 ? (
@@ -622,30 +865,88 @@ export function CreditCardBillPage() {
                       totalSpentCents > 0
                         ? Math.round((category.totalCents / totalSpentCents) * 100)
                         : 0;
+                    const hasBudget =
+                      category.spendingLimitCents != null && category.monthSpentCents != null;
+                    const budgetPercent =
+                      hasBudget && category.monthSpentCents != null && category.spendingLimitCents != null
+                        ? getBudgetUsedPercent(category.monthSpentCents, category.spendingLimitCents)
+                        : null;
+                    const progressPercent = budgetPercent ?? sharePercent;
+                    const progressFillPercent = Math.min(progressPercent, 100);
+                    const budgetFillColor =
+                      budgetPercent != null && budgetPercent >= 100
+                        ? "bg-destructive"
+                        : budgetPercent != null && budgetPercent >= 80
+                          ? "bg-amber-500"
+                          : "bg-primary";
+                    const isOverBudget =
+                      category.spendingLimitCents != null &&
+                      (budgetPercent != null
+                        ? budgetPercent >= 100
+                        : category.totalCents > category.spendingLimitCents);
 
                     return (
-                      <li key={category.name}>
+                      <li key={category.categoryId ?? category.name} className="group/category">
                         <div className="flex items-center justify-between gap-2">
-                          <span className="min-w-0 truncate text-[13px] font-light text-ink">
-                            {category.name}
-                          </span>
-                          <span className="tabular-money shrink-0 text-[13px] font-normal text-ink">
-                            {formatCents(category.totalCents)}
+                          <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                            <span
+                              className="inline-flex size-6 shrink-0 items-center justify-center rounded-full"
+                              style={{ backgroundColor: `${category.color}22` }}
+                            >
+                              <CategoryIcon icon={category.icon} color={category.color} size={14} />
+                            </span>
+                            <span className="min-w-0 truncate text-[13px] font-light text-ink">
+                              {category.name}
+                            </span>
+                            {category.categoryId ? (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="size-6 shrink-0 opacity-0 transition-opacity group-hover/category:opacity-100 focus-visible:opacity-100"
+                                aria-label={`Editar ${category.name}`}
+                                onClick={() => openEditCategory(category.categoryId)}
+                              >
+                                <Pencil className="size-3.5" />
+                              </Button>
+                            ) : null}
+                          </div>
+                          <span className="tabular-money shrink-0 text-[13px] font-normal">
+                            <span className={isOverBudget ? "text-destructive" : "text-ink"}>
+                              {formatCents(category.totalCents)}
+                            </span>
+                            {category.spendingLimitCents != null ? (
+                              <>
+                                <span className="font-light text-ink-mute"> / </span>
+                                <span className="font-light text-ink-mute">
+                                  {formatCents(category.spendingLimitCents)}
+                                </span>
+                              </>
+                            ) : null}
                           </span>
                         </div>
                         <div
                           className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-canvas-soft"
                           role="progressbar"
-                          aria-valuenow={sharePercent}
+                          aria-valuenow={progressPercent}
                           aria-valuemin={0}
                           aria-valuemax={100}
-                          aria-label={`${category.name}: ${sharePercent}% da fatura`}
+                          aria-label={
+                            budgetPercent != null &&
+                            category.monthSpentCents != null &&
+                            category.spendingLimitCents != null
+                              ? `${category.name}: ${formatBudgetUsedPercent(category.monthSpentCents, category.spendingLimitCents)} do orçamento utilizado no mês`
+                              : `${category.name}: ${sharePercent}% da fatura`
+                          }
                         >
                           <div
-                            className="h-full rounded-full motion-reduce:transition-none"
+                            className={cn(
+                              "h-full rounded-full motion-reduce:transition-none",
+                              budgetPercent != null ? budgetFillColor : undefined,
+                            )}
                             style={{
-                              width: `${sharePercent}%`,
-                              backgroundColor: category.color,
+                              width: `${progressFillPercent}%`,
+                              ...(budgetPercent == null ? { backgroundColor: category.color } : {}),
                             }}
                           />
                         </div>
@@ -658,11 +959,17 @@ export function CreditCardBillPage() {
           </aside>
 
           <div className="min-w-0 space-y-4">
-            <div className="flex w-full items-center gap-1.5">
+            <div
+              className={cn(
+                "flex w-full items-center gap-1.5 transition-opacity",
+                isBillLoading && "pointer-events-none opacity-60",
+              )}
+            >
               <button
                 type="button"
-                disabled
-                className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-hairline bg-canvas text-ink-mute opacity-50"
+                onClick={() => shiftSelectedMonth(-1)}
+                disabled={isBillLoading}
+                className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-hairline bg-canvas text-ink-mute transition-colors hover:bg-canvas-soft hover:text-ink disabled:opacity-50"
                 aria-label="Mês anterior"
               >
                 <ChevronLeft className="size-4" aria-hidden="true" />
@@ -672,13 +979,21 @@ export function CreditCardBillPage() {
                   <button
                     key={`${month.year}-${month.month}`}
                     type="button"
-                    disabled={!month.isCurrent}
-                    aria-current={month.isCurrent ? "true" : undefined}
+                    disabled={isBillLoading}
+                    onClick={() => selectMonth(month.month, month.year)}
+                    aria-current={month.isSelected ? "date" : undefined}
+                    aria-label={
+                      month.isCurrentOpenBill && !month.isSelected
+                        ? `${month.label}, fatura atual aberta`
+                        : month.label
+                    }
                     className={cn(
                       "inline-flex min-w-0 flex-1 items-center justify-center rounded-lg border px-2 py-1.5 text-[13px] font-normal transition-colors",
-                      month.isCurrent
+                      month.isSelected
                         ? "border-primary bg-primary text-on-primary shadow-none"
-                        : "border-transparent bg-transparent text-ink-mute opacity-50",
+                        : month.isCurrentOpenBill
+                          ? "border-primary bg-transparent text-ink hover:bg-canvas-soft"
+                          : "border-transparent bg-transparent text-ink-mute hover:bg-canvas-soft hover:text-ink",
                     )}
                   >
                     {month.label}
@@ -687,8 +1002,9 @@ export function CreditCardBillPage() {
               </div>
               <button
                 type="button"
-                disabled
-                className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-hairline bg-canvas text-ink-mute opacity-50"
+                onClick={() => shiftSelectedMonth(1)}
+                disabled={isBillLoading}
+                className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-hairline bg-canvas text-ink-mute transition-colors hover:bg-canvas-soft hover:text-ink disabled:opacity-50"
                 aria-label="Próximo mês"
               >
                 <ChevronRight className="size-4" aria-hidden="true" />
@@ -701,12 +1017,14 @@ export function CreditCardBillPage() {
                 label="Total da fatura"
                 value={formatCents(totalSpentCents)}
                 detail={`${bill.transactions.length} transaç${bill.transactions.length === 1 ? "ão" : "ões"}`}
+                tone="primary"
               />
               <BillStatCard
                 icon={TrendingUp}
                 label="Maior gasto"
                 value={largestTransaction ? formatCents(largestTransaction.amount) : "—"}
                 detail={largestTransaction?.description}
+                tone="expense"
               />
               <BillStatCard
                 icon={Calculator}
@@ -717,6 +1035,7 @@ export function CreditCardBillPage() {
                     ? `${bill.transactions.length} compra${bill.transactions.length === 1 ? "" : "s"} no ciclo`
                     : undefined
                 }
+                tone="insight"
               />
             </div>
 
@@ -812,7 +1131,7 @@ export function CreditCardBillPage() {
                           className="px-4 py-2.5 text-right"
                           align="right"
                         />
-                        <th scope="col" className="w-10 px-2 py-2.5">
+                        <th scope="col" className="w-[4.5rem] px-2 py-2.5">
                           <span className="sr-only">Ações</span>
                         </th>
                       </tr>
@@ -866,16 +1185,28 @@ export function CreditCardBillPage() {
                             </span>
                           </td>
                           <td className="px-2 py-3">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="size-8"
-                              aria-label={`Editar ${transaction.description}`}
-                              onClick={() => openEdit(transaction)}
-                            >
-                              <Pencil className="size-4" />
-                            </Button>
+                            <div className="flex items-center justify-end gap-0.5">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="size-8"
+                                aria-label={`Editar ${transaction.description}`}
+                                onClick={() => openEdit(transaction)}
+                              >
+                                <Pencil className="size-4" />
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost-destructive"
+                                size="icon"
+                                className="size-8"
+                                aria-label={`Excluir ${transaction.description}`}
+                                onClick={() => setDeletingTransaction(transaction)}
+                              >
+                                <Trash2 className="size-4" />
+                              </Button>
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -888,6 +1219,16 @@ export function CreditCardBillPage() {
         </div>
       ) : null}
       </PageShell>
+
+      {creditCard ? (
+        <CreditCardFormDialog
+          open={creditCardFormOpen}
+          onOpenChange={setCreditCardFormOpen}
+          creditCard={creditCard}
+          accounts={activeAccounts}
+          onSubmit={handleSubmitCreditCard}
+        />
+      ) : null}
 
       {creditCard ? (
         <TransactionFormDialog
@@ -903,10 +1244,49 @@ export function CreditCardBillPage() {
           categories={categories}
           creditCards={[creditCard]}
           defaultCreditCardId={creditCard.id}
+          defaultDate={defaultTransactionDate}
           lockCreditCard
           onSubmit={handleSubmitTransaction}
         />
       ) : null}
+
+      <CategoryFormDialog
+        open={categoryFormOpen}
+        onOpenChange={(open) => {
+          setCategoryFormOpen(open);
+
+          if (!open) {
+            setEditingCategory(undefined);
+          }
+        }}
+        category={editingCategory}
+        onSubmit={handleSubmitCategory}
+      />
+
+      <AlertDialog
+        open={Boolean(deletingTransaction)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDeletingTransaction(undefined);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Excluir transação?</AlertDialogTitle>
+            <AlertDialogDescription>
+              A transação &quot;{deletingTransaction?.description}&quot; será removida permanentemente
+              deste cartão.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={() => void handleDeleteTransaction()}>
+              Excluir
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

@@ -1,7 +1,8 @@
 import { isValidCategoryColor } from "@/lib/category-icons.js";
 import {
-  getBillingCycleEndDate,
+  getBillingCycle,
   getCurrentBillingCycleStart,
+  getCurrentOpenBillingCycleEnd,
 } from "@/lib/credit-card-billing.js";
 import type { BankAccountRepository } from "@/repositories/bank-account.repository.js";
 import type {
@@ -52,50 +53,86 @@ export class CreditCardService {
 
   async list(userId: string, includeInactive: boolean) {
     const rows = await this.creditCardRepository.list({ userId, includeInactive });
-    const spentByCard = await this.transactionRepository.sumExpensesByCreditCardsForCurrentCycles(
-      userId,
-      rows.map(({ creditCard }) => ({
-        creditCardId: creditCard.id,
-        cycleStart: getCurrentBillingCycleStart(creditCard.closingDay),
-      })),
-    );
+    const cardIds = rows.map(({ creditCard }) => creditCard.id);
+    const [spentByCard, limitUsedByCard] = await Promise.all([
+      this.transactionRepository.sumExpensesByCreditCardsForCurrentCycles(
+        userId,
+        rows.map(({ creditCard }) => {
+          const cycleStart = getCurrentBillingCycleStart(creditCard.closingDay);
+          return {
+            creditCardId: creditCard.id,
+            cycleStart,
+            cycleEnd: getCurrentOpenBillingCycleEnd(creditCard.closingDay),
+          };
+        }),
+      ),
+      this.transactionRepository.sumExpensesByCreditCardsFromCurrentMonthOnward(userId, cardIds),
+    ]);
 
     return {
       creditCards: rows.map((row) =>
         serializeCreditCardRow(row, {
           currentBillSpentCents: spentByCard.get(row.creditCard.id) ?? 0,
+          limitUsedCents: limitUsedByCard.get(row.creditCard.id) ?? 0,
         }),
       ),
     };
   }
 
-  async getBill(id: string, userId: string) {
+  async getBill(id: string, userId: string, referenceDate = new Date()) {
     const row = await this.creditCardRepository.findByIdWithBankAccount(id, userId);
 
     if (!row) {
       throw new Error("Cartão não encontrado");
     }
 
-    const cycleStart = getCurrentBillingCycleStart(row.creditCard.closingDay);
-    const cycleEnd = getBillingCycleEndDate();
-    const [billTransactions, totalSpentCents] = await Promise.all([
-      this.transactionRepository.listExpensesByCreditCardForCurrentCycle(
-        userId,
-        row.creditCard.id,
-        cycleStart,
-      ),
-      this.transactionRepository.sumExpensesByCreditCardForCurrentCycle(
-        userId,
-        row.creditCard.id,
-        cycleStart,
-      ),
-    ]);
+    const { cycleStart, cycleEnd, isCurrentOpenCycle } = getBillingCycle(
+      row.creditCard.closingDay,
+      referenceDate,
+    );
+    const currentCycleStart = getCurrentBillingCycleStart(row.creditCard.closingDay);
+    const currentCycleEnd = getCurrentOpenBillingCycleEnd(row.creditCard.closingDay);
+    const [billTransactions, totalSpentCents, currentBillSpentCents, limitUsedCents] =
+      await Promise.all([
+        this.transactionRepository.listExpensesByCreditCardForCycle(
+          userId,
+          row.creditCard.id,
+          cycleStart,
+          cycleEnd,
+        ),
+        this.transactionRepository.sumExpensesByCreditCardForCycle(
+          userId,
+          row.creditCard.id,
+          cycleStart,
+          cycleEnd,
+        ),
+        isCurrentOpenCycle
+          ? Promise.resolve(0)
+          : this.transactionRepository.sumExpensesByCreditCardForCurrentCycle(
+              userId,
+              row.creditCard.id,
+              currentCycleStart,
+              currentCycleEnd,
+            ),
+        this.transactionRepository.sumExpensesByCreditCardFromCurrentMonthOnward(
+          userId,
+          row.creditCard.id,
+        ),
+      ]);
+
+    const creditCardCurrentBillSpentCents = isCurrentOpenCycle
+      ? totalSpentCents
+      : currentBillSpentCents;
 
     return {
       bill: {
-        creditCard: serializeCreditCardRow(row, { currentBillSpentCents: totalSpentCents }),
+        creditCard: serializeCreditCardRow(row, {
+          currentBillSpentCents: creditCardCurrentBillSpentCents,
+          limitUsedCents,
+        }),
         cycleStart: cycleStart.toISOString(),
         cycleEnd: cycleEnd.toISOString(),
+        isCurrentOpenCycle,
         totalSpentCents,
         transactions: billTransactions.map(serializeBillTransaction),
       },
@@ -109,15 +146,23 @@ export class CreditCardService {
       throw new Error("Cartão não encontrado");
     }
 
-    const currentBillSpentCents =
-      await this.transactionRepository.sumExpensesByCreditCardForCurrentCycle(
+    const currentCycleStart = getCurrentBillingCycleStart(row.creditCard.closingDay);
+    const currentCycleEnd = getCurrentOpenBillingCycleEnd(row.creditCard.closingDay);
+    const [currentBillSpentCents, limitUsedCents] = await Promise.all([
+      this.transactionRepository.sumExpensesByCreditCardForCurrentCycle(
         userId,
         row.creditCard.id,
-        getCurrentBillingCycleStart(row.creditCard.closingDay),
-      );
+        currentCycleStart,
+        currentCycleEnd,
+      ),
+      this.transactionRepository.sumExpensesByCreditCardFromCurrentMonthOnward(
+        userId,
+        row.creditCard.id,
+      ),
+    ]);
 
     return {
-      creditCard: serializeCreditCardRow(row, { currentBillSpentCents }),
+      creditCard: serializeCreditCardRow(row, { currentBillSpentCents, limitUsedCents }),
     };
   }
 
@@ -319,9 +364,12 @@ function serializeCreditCardRow(
   row: CreditCardWithBankAccount,
   extras?: {
     currentBillSpentCents?: number;
+    limitUsedCents?: number;
   },
 ) {
   const { creditCard, bankAccount } = row;
+  const currentBillSpentCents = extras?.currentBillSpentCents ?? 0;
+  const limitUsedCents = extras?.limitUsedCents ?? currentBillSpentCents;
 
   return {
     id: creditCard.id,
@@ -333,7 +381,8 @@ function serializeCreditCardRow(
     dueDay: creditCard.dueDay,
     bankAccountId: creditCard.bankAccountId,
     creditLimitCents: creditCard.creditLimitCents,
-    currentBillSpentCents: extras?.currentBillSpentCents ?? 0,
+    currentBillSpentCents,
+    limitUsedCents,
     bankAccount: {
       id: bankAccount.id,
       name: bankAccount.name,

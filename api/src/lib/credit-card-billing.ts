@@ -58,3 +58,67 @@ export function getBillingCycleEndDate(referenceDate = new Date(), timeZone = TI
   const { year, month, day } = getDatePartsInTimezone(referenceDate, timeZone);
   return new Date(Date.UTC(year, month - 1, day, 12, 0, 0, 0));
 }
+
+export function getNextClosingDateOnOrAfter(
+  closingDay: number,
+  afterDate: Date,
+  timeZone = TIMEZONE,
+): Date {
+  const afterParts = getDatePartsInTimezone(afterDate, timeZone);
+  const afterNoon = new Date(
+    Date.UTC(afterParts.year, afterParts.month - 1, afterParts.day, 12, 0, 0, 0),
+  );
+
+  let year = afterParts.year;
+  let month = afterParts.month;
+
+  for (let attempt = 0; attempt < 14; attempt += 1) {
+    const effectiveClosing = getEffectiveClosingDay(year, month, closingDay);
+    const closingDate = new Date(Date.UTC(year, month - 1, effectiveClosing, 12, 0, 0, 0));
+
+    if (closingDate >= afterNoon) {
+      return closingDate;
+    }
+
+    month += 1;
+
+    if (month > 12) {
+      month = 1;
+      year += 1;
+    }
+  }
+
+  throw new Error("Não foi possível determinar o fim do ciclo de faturamento");
+}
+
+export function getCurrentOpenBillingCycleEnd(
+  closingDay: number,
+  referenceDate = new Date(),
+  timeZone = TIMEZONE,
+) {
+  const cycleStart = getCurrentBillingCycleStart(closingDay, referenceDate);
+  return getNextClosingDateOnOrAfter(closingDay, cycleStart, timeZone);
+}
+
+export function getBillingCycle(
+  closingDay: number,
+  referenceDate = new Date(),
+  timeZone = TIMEZONE,
+) {
+  const cycleStart = getCurrentBillingCycleStart(closingDay, referenceDate);
+  const currentCycleStart = getCurrentBillingCycleStart(closingDay, new Date());
+  const isCurrentOpenCycle = cycleStart.getTime() === currentCycleStart.getTime();
+  const cycleEnd = getNextClosingDateOnOrAfter(closingDay, cycleStart, timeZone);
+
+  return { cycleStart, cycleEnd, isCurrentOpenCycle };
+}
+
+export function formatDateInTimezone(date: Date, timeZone = TIMEZONE): string {
+  const { year, month, day } = getDatePartsInTimezone(date, timeZone);
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+export function getCurrentMonthStartDateString(referenceDate = new Date(), timeZone = TIMEZONE) {
+  const { year, month } = getDatePartsInTimezone(referenceDate, timeZone);
+  return `${year}-${String(month).padStart(2, "0")}-01`;
+}

@@ -1,3 +1,9 @@
+import type { CreditCard } from "@/services/credit-cards";
+
+export function getCreditCardLimitUsedCents(creditCard: Pick<CreditCard, "limitUsedCents" | "currentBillSpentCents">) {
+  return creditCard.limitUsedCents ?? creditCard.currentBillSpentCents;
+}
+
 export function getCreditLimitUsedPercent(spentCents: number, limitCents: number) {
   if (limitCents <= 0) {
     return 0;

@@ -9,6 +9,7 @@ import { formatCardCycle, formatMaskedCardNumber } from "@/lib/card-brands";
 import {
   formatCreditLimitUsedPercent,
   getAvailableLimitCents,
+  getCreditCardLimitUsedCents,
   getCreditLimitUsedPercent,
 } from "@/lib/credit-card-limit";
 import { getCreditCardBillPath } from "@/lib/credit-card-navigation";
@@ -37,7 +38,7 @@ interface CreditCardGridItemProps {
 }
 
 const creditCardGridActionButtonClassName =
-  "min-h-8 flex-1 rounded-lg border border-hairline bg-canvas px-2 text-[12px] shadow-[0_1px_0_rgba(13,37,61,0.04)] transition-[background-color,border-color,box-shadow,transform] hover:border-hairline-input hover:bg-ink/[0.04] hover:shadow-sm active:translate-y-px active:bg-ink/[0.06] active:shadow-none";
+  "min-h-8 w-full rounded-lg border border-hairline bg-canvas px-1.5 text-[11px] shadow-[0_1px_0_rgba(13,37,61,0.04)] transition-[background-color,border-color,box-shadow,transform] hover:border-hairline-input hover:bg-ink/[0.04] hover:shadow-sm active:translate-y-px active:bg-ink/[0.06] active:shadow-none";
 
 function CreditCardItemActions({
   creditCard,
@@ -117,10 +118,8 @@ function CreditCardLimitUsed({ creditCard }: { creditCard: CreditCard }) {
     return <span className="text-muted-foreground/60">—</span>;
   }
 
-  const percent = getCreditLimitUsedPercent(
-    creditCard.currentBillSpentCents,
-    creditCard.creditLimitCents,
-  );
+  const limitUsedCents = getCreditCardLimitUsedCents(creditCard);
+  const percent = getCreditLimitUsedPercent(limitUsedCents, creditCard.creditLimitCents);
 
   return (
     <span
@@ -129,7 +128,7 @@ function CreditCardLimitUsed({ creditCard }: { creditCard: CreditCard }) {
         percent >= 100 ? "text-destructive" : percent >= 80 ? "text-amber-600" : "text-muted-foreground",
       )}
     >
-      {formatCreditLimitUsedPercent(creditCard.currentBillSpentCents, creditCard.creditLimitCents)}
+      {formatCreditLimitUsedPercent(limitUsedCents, creditCard.creditLimitCents)}
     </span>
   );
 }
@@ -309,7 +308,8 @@ export function CreditCardGridItem({
   const cardColor = creditCard.color ?? "#533afd";
   const creditLimitCents = creditCard.creditLimitCents ?? 0;
   const currentBillSpentCents = creditCard.currentBillSpentCents ?? 0;
-  const availableLimitCents = getAvailableLimitCents(creditLimitCents, currentBillSpentCents);
+  const limitUsedCents = getCreditCardLimitUsedCents(creditCard);
+  const availableLimitCents = getAvailableLimitCents(creditLimitCents, limitUsedCents);
 
   return (
     <article
@@ -360,7 +360,7 @@ export function CreditCardGridItem({
         />
         <CreditCardLimitProgress
           creditLimitCents={creditLimitCents}
-          currentBillSpentCents={currentBillSpentCents}
+          currentBillSpentCents={limitUsedCents}
         />
         <CreditCardFinancialRow
           label="Limite disponível"
@@ -382,7 +382,12 @@ export function CreditCardGridItem({
         </div>
       </div>
 
-      <div className="flex gap-1.5 border-t border-hairline bg-canvas-soft px-2.5 py-2.5">
+      <div
+        className={cn(
+          "grid gap-2 border-t border-hairline bg-canvas-soft px-2.5 py-2.5",
+          creditCard.isActive ? "grid-cols-4" : "grid-cols-3",
+        )}
+      >
         <Button
           type="button"
           variant="ghost"

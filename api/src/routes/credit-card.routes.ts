@@ -4,6 +4,7 @@ import { creditCardController } from "@/controllers/index.js";
 import {
   createCreditCardSchema,
   creditCardIdSchema,
+  getCreditCardBillSchema,
   listCreditCardsSchema,
   updateCreditCardSchema,
 } from "./schemas/credit-card.schema.js";
@@ -24,7 +25,7 @@ export async function creditCardRoutes(app: FastifyInstance) {
   });
 
   typedApp.get("/credit-cards/:id/bill", {
-    schema: creditCardIdSchema,
+    schema: getCreditCardBillSchema,
     preHandler: [app.authenticate],
     handler: creditCardController.getBill,
   });

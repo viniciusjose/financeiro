@@ -79,6 +79,18 @@ export const creditCardIdSchema = {
   }),
 };
 
+export const getCreditCardBillSchema = {
+  params: z.object({
+    id: z.string().uuid("ID inválido"),
+  }),
+  querystring: z.object({
+    referenceDate: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "Data de referência inválida")
+      .optional(),
+  }),
+};
+
 export const createCreditCardSchema = {
   body: creditCardBodySchema,
 };

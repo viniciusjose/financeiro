@@ -29,6 +29,7 @@ export interface CreditCardBill {
   creditCard: CreditCard;
   cycleStart: string;
   cycleEnd: string;
+  isCurrentOpenCycle: boolean;
   totalSpentCents: number;
   transactions: CreditCardBillTransaction[];
 }
@@ -44,6 +45,7 @@ export interface CreditCard {
   bankAccountId: string;
   creditLimitCents: number | null;
   currentBillSpentCents: number;
+  limitUsedCents: number;
   bankAccount: CreditCardBankAccount;
   isActive: boolean;
   isBlocked: boolean;
@@ -79,8 +81,18 @@ export const creditCardsService = {
     return data.creditCard;
   },
 
-  async getBill(id: string) {
-    const data = await api.get<{ bill: CreditCardBill }>(`/api/credit-cards/${id}/bill`);
+  async getBill(id: string, options?: { referenceDate?: string }) {
+    const params = new URLSearchParams();
+
+    if (options?.referenceDate) {
+      params.set("referenceDate", options.referenceDate);
+    }
+
+    const query = params.toString();
+    const path = query
+      ? `/api/credit-cards/${id}/bill?${query}`
+      : `/api/credit-cards/${id}/bill`;
+    const data = await api.get<{ bill: CreditCardBill }>(path);
     return data.bill;
   },
 

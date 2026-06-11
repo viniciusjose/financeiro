@@ -43,13 +43,14 @@ interface TransactionFormDialogProps {
   categories: Category[];
   creditCards: CreditCard[];
   defaultCreditCardId?: string | null;
+  defaultDate?: string;
   lockCreditCard?: boolean;
   onSubmit: (values: CreateTransactionInput | UpdateTransactionInput) => Promise<void>;
 }
 
 function getDefaultValues(
   transaction?: Transaction,
-  options?: { defaultCreditCardId?: string | null },
+  options?: { defaultCreditCardId?: string | null; defaultDate?: string },
 ): CreateTransactionInput {
   if (!transaction) {
     return {
@@ -58,7 +59,7 @@ function getDefaultValues(
       type: "expense",
       categoryId: null,
       creditCardId: options?.defaultCreditCardId ?? null,
-      date: getLocalIsoDate(),
+      date: options?.defaultDate ?? getLocalIsoDate(),
     };
   }
 
@@ -79,6 +80,7 @@ export function TransactionFormDialog({
   categories,
   creditCards,
   defaultCreditCardId = null,
+  defaultDate,
   lockCreditCard = false,
   onSubmit,
 }: TransactionFormDialogProps) {
@@ -86,7 +88,7 @@ export function TransactionFormDialog({
 
   const form = useForm<CreateTransactionInput>({
     resolver: zodResolver(createTransactionSchema),
-    defaultValues: getDefaultValues(transaction, { defaultCreditCardId }),
+    defaultValues: getDefaultValues(transaction, { defaultCreditCardId, defaultDate }),
   });
 
   const transactionType = form.watch("type");
@@ -95,9 +97,9 @@ export function TransactionFormDialog({
 
   useEffect(() => {
     if (open) {
-      form.reset(getDefaultValues(transaction, { defaultCreditCardId }));
+      form.reset(getDefaultValues(transaction, { defaultCreditCardId, defaultDate }));
     }
-  }, [defaultCreditCardId, form, open, transaction]);
+  }, [defaultCreditCardId, defaultDate, form, open, transaction]);
 
   useEffect(() => {
     if (categoryId === null || categoryId === undefined) {

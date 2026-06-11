@@ -19,7 +19,14 @@ export class CreditCardController {
   getBill = async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { id } = request.params as { id: string };
-      const result = await this.creditCardService.getBill(id, request.user.sub);
+      const { referenceDate } = request.query as { referenceDate?: string };
+      const parsedReferenceDate = referenceDate ? new Date(`${referenceDate}T12:00:00.000Z`) : new Date();
+
+      if (Number.isNaN(parsedReferenceDate.getTime())) {
+        return sendError(reply, "Data de referência inválida", 400);
+      }
+
+      const result = await this.creditCardService.getBill(id, request.user.sub, parsedReferenceDate);
       return sendSuccess(reply, result);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Erro ao buscar fatura";
