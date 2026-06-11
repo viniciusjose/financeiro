@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { positiveMoneyCentsSchema } from "@/lib/money.js";
 
 export const listTransactionsSchema = {
   querystring: z.object({
@@ -16,12 +17,10 @@ export const transactionIdSchema = {
 export const createTransactionSchema = {
   body: z.object({
     description: z.string().min(1, "Descrição é obrigatória"),
-    amount: z
-      .string()
-      .regex(/^\d+(\.\d{1,2})?$/, "Valor inválido")
-      .refine((value) => Number(value) > 0, "Valor deve ser maior que zero"),
+    amount: positiveMoneyCentsSchema,
     type: z.enum(["income", "expense"]),
-    category: z.string().min(1, "Categoria é obrigatória"),
+    categoryId: z.string().uuid("Categoria inválida").optional().nullable(),
+    creditCardId: z.string().uuid("Cartão inválido").optional().nullable(),
     date: z.string().datetime("Data inválida"),
   }),
 };
@@ -32,13 +31,10 @@ export const updateTransactionSchema = {
   }),
   body: z.object({
     description: z.string().min(1).optional(),
-    amount: z
-      .string()
-      .regex(/^\d+(\.\d{1,2})?$/)
-      .refine((value) => Number(value) > 0)
-      .optional(),
+    amount: positiveMoneyCentsSchema.optional(),
     type: z.enum(["income", "expense"]).optional(),
-    category: z.string().min(1).optional(),
+    categoryId: z.string().uuid("Categoria inválida").optional().nullable(),
+    creditCardId: z.string().uuid("Cartão inválido").optional().nullable(),
     date: z.string().datetime().optional(),
   }),
 };

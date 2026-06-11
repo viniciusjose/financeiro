@@ -17,4 +17,14 @@ export class UserRepository {
     const [user] = await db.insert(users).values(data).returning();
     return user;
   }
+
+  async updatePassword(id: string, passwordHash: string): Promise<User | undefined> {
+    const [user] = await db
+      .update(users)
+      .set({ passwordHash, updatedAt: new Date() })
+      .where(eq(users.id, id))
+      .returning();
+
+    return user;
+  }
 }

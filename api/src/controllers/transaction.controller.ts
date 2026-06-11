@@ -31,9 +31,10 @@ export class TransactionController {
     try {
       const body = request.body as {
         description: string;
-        amount: string;
+        amount: number;
         type: "income" | "expense";
-        category: string;
+        categoryId?: string | null;
+        creditCardId?: string | null;
         date: string;
       };
 
@@ -42,7 +43,8 @@ export class TransactionController {
         description: body.description,
         amount: body.amount,
         type: body.type,
-        category: body.category,
+        categoryId: body.categoryId,
+        creditCardId: body.creditCardId,
         date: new Date(body.date),
       });
 
@@ -58,9 +60,10 @@ export class TransactionController {
       const { id } = request.params as { id: string };
       const body = request.body as {
         description?: string;
-        amount?: string;
+        amount?: number;
         type?: "income" | "expense";
-        category?: string;
+        categoryId?: string | null;
+        creditCardId?: string | null;
         date?: string;
       };
 
@@ -70,7 +73,8 @@ export class TransactionController {
         description: body.description,
         amount: body.amount,
         type: body.type,
-        category: body.category,
+        categoryId: body.categoryId,
+        creditCardId: body.creditCardId,
         date: body.date ? new Date(body.date) : undefined,
       });
 

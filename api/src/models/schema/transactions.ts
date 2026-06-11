@@ -1,4 +1,6 @@
-import { numeric, pgEnum, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { integer, pgEnum, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { categories } from "./categories.js";
+import { creditCards } from "./credit-cards.js";
 import { users } from "./users.js";
 
 export const transactionTypeEnum = pgEnum("transaction_type", ["income", "expense"]);
@@ -9,9 +11,10 @@ export const transactions = pgTable("transactions", {
     .notNull()
     .references(() => users.id, { onDelete: "cascade" }),
   description: text("description").notNull(),
-  amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+  amount: integer("amount").notNull(),
   type: transactionTypeEnum("type").notNull(),
-  category: text("category").notNull(),
+  categoryId: uuid("category_id").references(() => categories.id, { onDelete: "restrict" }),
+  creditCardId: uuid("credit_card_id").references(() => creditCards.id, { onDelete: "restrict" }),
   date: timestamp("date", { withTimezone: true }).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

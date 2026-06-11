@@ -1,5 +1,7 @@
-import { and, count, desc, eq } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, isNotNull, sql, sum } from "drizzle-orm";
 import { db } from "@/db/index.js";
+import { categories } from "@/models/schema/categories.js";
+import { creditCards } from "@/models/schema/credit-cards.js";
 import {
   type NewTransaction,
   type Transaction,
@@ -12,24 +14,78 @@ export interface ListTransactionsParams {
   perPage: number;
 }
 
+export type TransactionWithCategory = Transaction & {
+  category: {
+    id: string;
+    name: string;
+    icon: string;
+    color: string;
+  } | null;
+  creditCard: {
+    id: string;
+    name: string;
+    lastFourDigits: string;
+    brand: "visa" | "mastercard" | "elo" | "amex" | "hipercard" | "diners" | "other";
+    brandName: string | null;
+  } | null;
+};
+
 export class TransactionRepository {
-  async findById(id: string, userId: string): Promise<Transaction | undefined> {
-    const [transaction] = await db
-      .select()
+  async findById(id: string, userId: string): Promise<TransactionWithCategory | undefined> {
+    const [row] = await db
+      .select({
+        transaction: transactions,
+        category: {
+          id: categories.id,
+          name: categories.name,
+          icon: categories.icon,
+          color: categories.color,
+        },
+        creditCard: {
+          id: creditCards.id,
+          name: creditCards.name,
+          lastFourDigits: creditCards.lastFourDigits,
+          brand: creditCards.brand,
+          brandName: creditCards.brandName,
+        },
+      })
       .from(transactions)
+      .leftJoin(categories, eq(transactions.categoryId, categories.id))
+      .leftJoin(creditCards, eq(transactions.creditCardId, creditCards.id))
       .where(and(eq(transactions.id, id), eq(transactions.userId, userId)))
       .limit(1);
 
-    return transaction;
+    if (!row) {
+      return undefined;
+    }
+
+    return mapRow(row);
   }
 
   async list({ userId, page, perPage }: ListTransactionsParams) {
     const offset = (page - 1) * perPage;
 
-    const [items, totalResult] = await Promise.all([
+    const [rows, totalResult] = await Promise.all([
       db
-        .select()
+        .select({
+          transaction: transactions,
+          category: {
+            id: categories.id,
+            name: categories.name,
+            icon: categories.icon,
+            color: categories.color,
+          },
+          creditCard: {
+            id: creditCards.id,
+            name: creditCards.name,
+            lastFourDigits: creditCards.lastFourDigits,
+            brand: creditCards.brand,
+            brandName: creditCards.brandName,
+          },
+        })
         .from(transactions)
+        .leftJoin(categories, eq(transactions.categoryId, categories.id))
+        .leftJoin(creditCards, eq(transactions.creditCardId, creditCards.id))
         .where(eq(transactions.userId, userId))
         .orderBy(desc(transactions.date))
         .limit(perPage)
@@ -38,28 +94,38 @@ export class TransactionRepository {
     ]);
 
     return {
-      items,
+      items: rows.map(mapRow),
       total: totalResult[0]?.total ?? 0,
     };
   }
 
-  async create(data: NewTransaction): Promise<Transaction> {
+  async create(data: NewTransaction): Promise<TransactionWithCategory> {
     const [transaction] = await db.insert(transactions).values(data).returning();
-    return transaction;
+    const created = await this.findById(transaction.id, transaction.userId);
+
+    if (!created) {
+      throw new Error("Transação não encontrada");
+    }
+
+    return created;
   }
 
   async update(
     id: string,
     userId: string,
     data: Partial<Omit<NewTransaction, "id" | "userId">>,
-  ): Promise<Transaction | undefined> {
+  ): Promise<TransactionWithCategory | undefined> {
     const [transaction] = await db
       .update(transactions)
       .set({ ...data, updatedAt: new Date() })
       .where(and(eq(transactions.id, id), eq(transactions.userId, userId)))
       .returning();
 
-    return transaction;
+    if (!transaction) {
+      return undefined;
+    }
+
+    return this.findById(id, userId);
   }
 
   async delete(id: string, userId: string): Promise<boolean> {
@@ -70,4 +136,157 @@ export class TransactionRepository {
 
     return result.length > 0;
   }
+
+  async countByCategoryId(categoryId: string): Promise<number> {
+    const [result] = await db
+      .select({ total: count() })
+      .from(transactions)
+      .where(eq(transactions.categoryId, categoryId));
+
+    return result?.total ?? 0;
+  }
+
+  async countByCreditCardId(creditCardId: string): Promise<number> {
+    const [result] = await db
+      .select({ total: count() })
+      .from(transactions)
+      .where(eq(transactions.creditCardId, creditCardId));
+
+    return result?.total ?? 0;
+  }
+
+  async listExpensesByCreditCardForCurrentCycle(
+    userId: string,
+    creditCardId: string,
+    cycleStart: Date,
+  ) {
+    const rows = await db
+      .select({
+        transaction: transactions,
+        category: {
+          id: categories.id,
+          name: categories.name,
+          icon: categories.icon,
+          color: categories.color,
+        },
+        creditCard: {
+          id: creditCards.id,
+          name: creditCards.name,
+          lastFourDigits: creditCards.lastFourDigits,
+          brand: creditCards.brand,
+          brandName: creditCards.brandName,
+        },
+      })
+      .from(transactions)
+      .leftJoin(categories, eq(transactions.categoryId, categories.id))
+      .leftJoin(creditCards, eq(transactions.creditCardId, creditCards.id))
+      .where(
+        and(
+          eq(transactions.userId, userId),
+          eq(transactions.creditCardId, creditCardId),
+          eq(transactions.type, "expense"),
+          gte(transactions.date, cycleStart),
+          sql`timezone('America/Sao_Paulo', ${transactions.date})::date <= timezone('America/Sao_Paulo', now())::date`,
+        ),
+      )
+      .orderBy(desc(transactions.date));
+
+    return rows.map(mapRow);
+  }
+
+  async sumExpensesByCreditCardForCurrentCycle(
+    userId: string,
+    creditCardId: string,
+    cycleStart: Date,
+  ) {
+    const [result] = await db
+      .select({ total: sum(transactions.amount) })
+      .from(transactions)
+      .where(
+        and(
+          eq(transactions.userId, userId),
+          eq(transactions.creditCardId, creditCardId),
+          eq(transactions.type, "expense"),
+          gte(transactions.date, cycleStart),
+          sql`timezone('America/Sao_Paulo', ${transactions.date})::date <= timezone('America/Sao_Paulo', now())::date`,
+        ),
+      );
+
+    return Number(result?.total ?? 0);
+  }
+
+  async sumExpensesByCreditCardsForCurrentCycles(
+    userId: string,
+    cycles: Array<{ creditCardId: string; cycleStart: Date }>,
+  ) {
+    if (cycles.length === 0) {
+      return new Map<string, number>();
+    }
+
+    const results = await Promise.all(
+      cycles.map(async ({ creditCardId, cycleStart }) => {
+        const total = await this.sumExpensesByCreditCardForCurrentCycle(
+          userId,
+          creditCardId,
+          cycleStart,
+        );
+        return [creditCardId, total] as const;
+      }),
+    );
+
+    return new Map(results);
+  }
+
+  async sumExpensesByCategoryIdsForCurrentMonth(userId: string, categoryIds: string[]) {
+    if (categoryIds.length === 0) {
+      return new Map<string, number>();
+    }
+
+    const rows = await db
+      .select({
+        categoryId: transactions.categoryId,
+        total: sum(transactions.amount),
+      })
+      .from(transactions)
+      .where(
+        and(
+          eq(transactions.userId, userId),
+          eq(transactions.type, "expense"),
+          inArray(transactions.categoryId, categoryIds),
+          isNotNull(transactions.categoryId),
+          sql`${transactions.date} >= date_trunc('month', timezone('America/Sao_Paulo', now()))`,
+          sql`${transactions.date} < date_trunc('month', timezone('America/Sao_Paulo', now())) + interval '1 month'`,
+        ),
+      )
+      .groupBy(transactions.categoryId);
+
+    return new Map(
+      rows
+        .filter((row) => row.categoryId != null)
+        .map((row) => [row.categoryId as string, Number(row.total ?? 0)]),
+    );
+  }
+}
+
+function mapRow(row: {
+  transaction: Transaction;
+  category: {
+    id: string;
+    name: string;
+    icon: string;
+    color: string;
+  } | null;
+  creditCard: {
+    id: string;
+    name: string;
+    lastFourDigits: string;
+    brand: "visa" | "mastercard" | "elo" | "amex" | "hipercard" | "diners" | "other";
+    brandName: string | null;
+  } | null;
+}): TransactionWithCategory {
+  return {
+    ...row.transaction,
+    category: row.category?.id ? row.category : null,
+    creditCard: row.creditCard?.id ? row.creditCard : null,
+  };
 }
