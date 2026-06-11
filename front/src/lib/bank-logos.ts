@@ -27,7 +27,7 @@ export const BANK_LOGOS: Record<BankInstitution, BankLogoMeta> = {
     label: "Itaú",
     alt: "Logo Itaú",
     src: itauLogo,
-    fit: "wide",
+    fit: "square",
   },
   sofisa: {
     label: "Sofisa",

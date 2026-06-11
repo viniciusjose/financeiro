@@ -10,6 +10,7 @@ interface CategorySegmentedControlProps<T extends string> {
   options: readonly SegmentedOption<T>[];
   value: T;
   onChange: (value: T) => void;
+  disabledValues?: readonly T[];
   legend?: string;
   ariaLabel?: string;
   className?: string;
@@ -21,6 +22,7 @@ export function CategorySegmentedControl<T extends string>({
   options,
   value,
   onChange,
+  disabledValues,
   legend,
   ariaLabel,
   className,
@@ -41,16 +43,19 @@ export function CategorySegmentedControl<T extends string>({
     >
       {options.map((option) => {
         const selected = value === option.value;
+        const isDisabled = disabledValues?.includes(option.value) ?? false;
 
         return (
           <label
             key={option.value}
             className={cn(
-              "flex min-h-8 cursor-pointer items-center justify-center rounded-full px-2.5 py-1 text-[13px] transition-colors focus-within:outline-none focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 motion-reduce:transition-none",
+              "flex min-h-8 items-center justify-center rounded-full px-2.5 py-1 text-[13px] transition-colors focus-within:outline-none focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 motion-reduce:transition-none",
               stretch ? "min-w-0 flex-1 px-2.5 sm:px-3" : "flex-none px-3",
+              isDisabled ? "cursor-not-allowed opacity-40" : "cursor-pointer",
               selected
                 ? "bg-primary font-normal text-on-primary"
-                : "font-light text-muted-foreground hover:text-ink-secondary",
+                : "font-light text-muted-foreground",
+              !isDisabled && !selected && "hover:text-ink-secondary",
             )}
           >
             <input
@@ -58,7 +63,12 @@ export function CategorySegmentedControl<T extends string>({
               name={groupName}
               value={option.value}
               checked={selected}
-              onChange={() => onChange(option.value)}
+              disabled={isDisabled}
+              onChange={() => {
+                if (!isDisabled) {
+                  onChange(option.value);
+                }
+              }}
               className="sr-only"
             />
             {option.label}

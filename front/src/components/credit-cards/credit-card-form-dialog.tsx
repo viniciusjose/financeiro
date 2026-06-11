@@ -68,9 +68,7 @@ function getDefaultValues(accounts: BankAccount[], creditCard?: CreditCard): Cre
     dueDay: creditCard.dueDay,
     bankAccountId: creditCard.bankAccountId,
     creditLimit:
-      creditCard.creditLimitCents != null
-        ? formatCentsAsBrlInput(creditCard.creditLimitCents)
-        : "",
+      creditCard.creditLimitCents != null ? formatCentsAsBrlInput(creditCard.creditLimitCents) : "",
     color: creditCard.color ?? CATEGORY_COLOR_PALETTE[10].hex,
     isActive: creditCard.isActive,
   };
@@ -180,8 +178,13 @@ export function CreditCardFormDialog({
                       <BankAccountPicker
                         accounts={accounts}
                         value={field.value}
-                        onValueChange={field.onChange}
+                        onValueChange={(value) => {
+                          if (value) {
+                            field.onChange(value);
+                          }
+                        }}
                         disabled={field.disabled || accounts.length === 0}
+                        placeholder="Selecione a conta de pagamento"
                       />
                       <FormMessage />
                     </FormItem>

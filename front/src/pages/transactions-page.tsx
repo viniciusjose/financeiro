@@ -1,6 +1,8 @@
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
+import { BankLogo } from "@/components/bank-accounts/bank-logo";
 import { CategoryBadge } from "@/components/categories/category-badge";
+import { CardBrandLogo } from "@/components/credit-cards/card-brand-logo";
 import { PageShell } from "@/components/layout/page-shell";
 import { SeriesScopeDialog } from "@/components/transactions/series-scope-dialog";
 import { TransactionFormDialog } from "@/components/transactions/transaction-form-dialog";
@@ -17,13 +19,18 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useBankAccounts } from "@/hooks/use-bank-accounts";
 import { useCategories } from "@/hooks/use-categories";
 import { useCreditCards } from "@/hooks/use-credit-cards";
 import { useTransactions } from "@/hooks/use-transactions";
 import { formatCents } from "@/lib/money";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
-import type { ApplyScope, CreateTransactionInput, UpdateTransactionInput } from "@/schemas/transaction.schema";
+import type {
+  ApplyScope,
+  CreateTransactionInput,
+  UpdateTransactionInput,
+} from "@/schemas/transaction.schema";
 import type { Transaction } from "@/services/transactions";
 
 type PendingEdit = {
@@ -33,6 +40,7 @@ type PendingEdit = {
 
 export function TransactionsPage() {
   const { categories } = useCategories();
+  const { accounts: bankAccounts } = useBankAccounts();
   const { creditCards } = useCreditCards();
   const {
     transactions,
@@ -198,6 +206,31 @@ export function TransactionsPage() {
                   </div>
                   <p className="text-caption text-muted-foreground">
                     {new Date(transaction.date).toLocaleDateString("pt-BR")}
+                    {transaction.bankAccount ? (
+                      <>
+                        {" · "}
+                        <span className="inline-flex items-center gap-1">
+                          <BankLogo
+                            bank={transaction.bankAccount.bank}
+                            bankName={transaction.bankAccount.bankName}
+                            size="sm"
+                          />
+                          {transaction.bankAccount.name}
+                        </span>
+                      </>
+                    ) : transaction.creditCard ? (
+                      <>
+                        {" · "}
+                        <span className="inline-flex items-center gap-1">
+                          <CardBrandLogo
+                            brand={transaction.creditCard.brand}
+                            brandName={transaction.creditCard.brandName}
+                            size="sm"
+                          />
+                          {transaction.creditCard.name}
+                        </span>
+                      </>
+                    ) : null}
                   </p>
                 </div>
 
@@ -248,6 +281,7 @@ export function TransactionsPage() {
         }}
         transaction={editingTransaction}
         categories={categories}
+        bankAccounts={bankAccounts}
         creditCards={creditCards}
         onSubmit={handleSubmit}
       />

@@ -71,6 +71,13 @@
       "when": 1781110000000,
       "tag": "0009_transaction_series",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1781115000000,
+      "tag": "0010_transaction_bank_account",
+      "breakpoints": true
     }
   ]
 }

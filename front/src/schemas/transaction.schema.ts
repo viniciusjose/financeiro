@@ -16,6 +16,7 @@ export const createTransactionSchema = z
     type: z.enum(["income", "expense"]),
     categoryId: z.string().uuid("Categoria inválida").nullable().optional(),
     creditCardId: z.string().uuid("Cartão inválido").nullable().optional(),
+    bankAccountId: z.string().uuid("Conta bancária inválida").nullable().optional(),
     date: z
       .string()
       .regex(/^\d{4}-\d{2}-\d{2}$/, "Data é obrigatória")
@@ -24,6 +25,22 @@ export const createTransactionSchema = z
     recurrenceCount: z.number().int().optional(),
   })
   .superRefine((values, context) => {
+    if (values.type === "income" && !values.bankAccountId) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["bankAccountId"],
+        message: "Selecione uma conta bancária para a receita",
+      });
+    }
+
+    if (values.type === "expense" && values.bankAccountId && values.creditCardId) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["bankAccountId"],
+        message: "Despesa não pode estar vinculada a conta e cartão ao mesmo tempo",
+      });
+    }
+
     if (values.mode === "single") {
       return;
     }
@@ -71,6 +88,7 @@ export function toApiCreatePayload(values: CreateTransactionInput) {
     type: "income" | "expense";
     categoryId: string | null;
     creditCardId: string | null;
+    bankAccountId: string | null;
     date: string;
     recurrence?: {
       kind: "installment" | "recurring";
@@ -81,7 +99,14 @@ export function toApiCreatePayload(values: CreateTransactionInput) {
     amount,
     type: values.type,
     categoryId: values.categoryId ?? null,
-    creditCardId: values.type === "expense" ? (values.creditCardId ?? null) : null,
+    creditCardId:
+      values.type === "expense" && !values.bankAccountId ? (values.creditCardId ?? null) : null,
+    bankAccountId:
+      values.type === "income"
+        ? (values.bankAccountId ?? null)
+        : values.creditCardId
+          ? null
+          : (values.bankAccountId ?? null),
     date: toIsoDateTime(values.date),
   };
 

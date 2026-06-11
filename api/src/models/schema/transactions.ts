@@ -1,4 +1,5 @@
 import { index, integer, pgEnum, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { bankAccounts } from "./bank-accounts.js";
 import { categories } from "./categories.js";
 import { creditCards } from "./credit-cards.js";
 import { users } from "./users.js";
@@ -21,6 +22,9 @@ export const transactions = pgTable(
     type: transactionTypeEnum("type").notNull(),
     categoryId: uuid("category_id").references(() => categories.id, { onDelete: "restrict" }),
     creditCardId: uuid("credit_card_id").references(() => creditCards.id, { onDelete: "restrict" }),
+    bankAccountId: uuid("bank_account_id").references(() => bankAccounts.id, {
+      onDelete: "restrict",
+    }),
     seriesId: uuid("series_id"),
     seriesKind: transactionSeriesKindEnum("series_kind"),
     seriesIndex: integer("series_index"),
@@ -29,7 +33,9 @@ export const transactions = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [index("transactions_series_id_series_index_idx").on(table.seriesId, table.seriesIndex)],
+  (table) => [
+    index("transactions_series_id_series_index_idx").on(table.seriesId, table.seriesIndex),
+  ],
 );
 
 export type Transaction = typeof transactions.$inferSelect;

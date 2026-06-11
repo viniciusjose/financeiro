@@ -36,6 +36,7 @@ export class TransactionController {
         type: "income" | "expense";
         categoryId?: string | null;
         creditCardId?: string | null;
+        bankAccountId?: string | null;
         date: string;
         recurrence?: {
           kind: "installment" | "recurring";
@@ -50,6 +51,7 @@ export class TransactionController {
         type: body.type,
         categoryId: body.categoryId,
         creditCardId: body.creditCardId,
+        bankAccountId: body.bankAccountId,
         date: new Date(body.date),
         recurrence: body.recurrence,
       });
@@ -74,6 +76,7 @@ export class TransactionController {
         type?: "income" | "expense";
         categoryId?: string | null;
         creditCardId?: string | null;
+        bankAccountId?: string | null;
         date?: string;
         applyScope?: ApplyScope;
       };
@@ -86,6 +89,7 @@ export class TransactionController {
         type: body.type,
         categoryId: body.categoryId,
         creditCardId: body.creditCardId,
+        bankAccountId: body.bankAccountId,
         date: body.date ? new Date(body.date) : undefined,
         applyScope: body.applyScope,
       });

@@ -18,10 +18,13 @@ import type { BankAccount } from "@/services/bank-accounts";
 
 interface BankAccountPickerProps {
   accounts: BankAccount[];
-  value: string;
-  onValueChange: (value: string) => void;
+  value: string | null;
+  onValueChange: (value: string | null) => void;
   disabled?: boolean;
   className?: string;
+  allowNone?: boolean;
+  noneLabel?: string;
+  placeholder?: string;
 }
 
 export function BankAccountPicker({
@@ -30,9 +33,13 @@ export function BankAccountPicker({
   onValueChange,
   disabled,
   className,
+  allowNone = false,
+  noneLabel = "Sem conta",
+  placeholder = "Selecione a conta bancária",
 }: BankAccountPickerProps) {
   const [open, setOpen] = useState(false);
-  const selectedAccount = accounts.find((account) => account.id === value);
+  const availableAccounts = accounts.filter((account) => account.isActive);
+  const selectedAccount = availableAccounts.find((account) => account.id === value);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -54,7 +61,7 @@ export function BankAccountPicker({
                 <span className="truncate">{selectedAccount.name}</span>
               </span>
             ) : (
-              <span className="text-muted-foreground">Selecione a conta de pagamento</span>
+              <span className="text-muted-foreground">{placeholder}</span>
             )}
             <ChevronsUpDownIcon className="size-4 shrink-0 opacity-50" />
           </InputTrigger>
@@ -68,9 +75,23 @@ export function BankAccountPicker({
         <Command>
           <CommandInput placeholder="Buscar conta..." />
           <CommandList>
-            <CommandEmpty>Nenhuma conta encontrada.</CommandEmpty>
+            <CommandEmpty>Nenhuma conta ativa encontrada.</CommandEmpty>
             <CommandGroup>
-              {accounts.map((account) => (
+              {allowNone ? (
+                <CommandItem
+                  value="none"
+                  onSelect={() => {
+                    onValueChange(null);
+                    setOpen(false);
+                  }}
+                >
+                  <CheckIcon
+                    className={cn("mr-2 size-4", value === null ? "opacity-100" : "opacity-0")}
+                  />
+                  {noneLabel}
+                </CommandItem>
+              ) : null}
+              {availableAccounts.map((account) => (
                 <CommandItem
                   key={account.id}
                   value={`${account.name} ${getBankLabel(account.bank, account.bankName)}`}
@@ -80,7 +101,10 @@ export function BankAccountPicker({
                   }}
                 >
                   <CheckIcon
-                    className={cn("size-4", value === account.id ? "opacity-100" : "opacity-0")}
+                    className={cn(
+                      "mr-2 size-4",
+                      value === account.id ? "opacity-100" : "opacity-0",
+                    )}
                   />
                   <BankLogo bank={account.bank} bankName={account.bankName} size="sm" />
                   <span className="truncate">

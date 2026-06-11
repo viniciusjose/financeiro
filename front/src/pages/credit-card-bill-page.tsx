@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import {
   ArrowDown,
   ArrowUp,
@@ -6,19 +7,18 @@ import {
   ChevronLeft,
   ChevronRight,
   FileText,
+  type LucideIcon,
   Pencil,
   Plus,
   Search,
   Trash2,
   TrendingUp,
-  type LucideIcon,
 } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { BankLogo } from "@/components/bank-accounts/bank-logo";
-import { CategoryFormDialog } from "@/components/categories/category-form-dialog";
 import { CategoryBadge } from "@/components/categories/category-badge";
+import { CategoryFormDialog } from "@/components/categories/category-form-dialog";
 import { CategoryIcon } from "@/components/categories/category-icon";
 import { CardBrandLogo } from "@/components/credit-cards/card-brand-logo";
 import { CreditCardFormDialog } from "@/components/credit-cards/credit-card-form-dialog";
@@ -42,41 +42,49 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useBankAccounts } from "@/hooks/use-bank-accounts";
 import { useCategories } from "@/hooks/use-categories";
 import { useCreditCardBill } from "@/hooks/use-credit-card-bill";
-import { useAuth } from "@/providers/auth-provider";
 import { getBankLabel } from "@/lib/bank-logos";
 import { formatDueDayLabel, formatMaskedCardNumber } from "@/lib/card-brands";
+import { formatBudgetUsedPercent, getBudgetUsedPercent } from "@/lib/category-budget";
 import {
   formatCreditLimitUsedPercent,
   getAvailableLimitCents,
   getCreditCardLimitUsedCents,
   getCreditLimitUsedPercent,
 } from "@/lib/credit-card-limit";
-import {
-  formatBudgetUsedPercent,
-  getBudgetUsedPercent,
-} from "@/lib/category-budget";
-import { formatCents } from "@/lib/money";
 import { getTodayInMonth } from "@/lib/date";
+import { formatCents } from "@/lib/money";
 import { queryKeys } from "@/lib/query-keys";
-import { getUserDisplayName } from "@/lib/user-display";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import type { UpdateCategoryInput } from "@/schemas/category.schema";
 import type { UpdateCreditCardInput } from "@/schemas/credit-card.schema";
 import type {
   ApplyScope,
   CreateTransactionInput,
   UpdateTransactionInput,
 } from "@/schemas/transaction.schema";
-import type { UpdateCategoryInput } from "@/schemas/category.schema";
+import type { Category } from "@/services/categories";
 import {
   type CreditCard,
   type CreditCardBillTransaction,
   creditCardsService,
 } from "@/services/credit-cards";
 import { type Transaction, transactionsService } from "@/services/transactions";
-import type { Category } from "@/services/categories";
 
-const MONTH_LABELS = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+const MONTH_LABELS = [
+  "Jan",
+  "Fev",
+  "Mar",
+  "Abr",
+  "Mai",
+  "Jun",
+  "Jul",
+  "Ago",
+  "Set",
+  "Out",
+  "Nov",
+  "Dez",
+];
 
 function formatMonthYearLabel(month: number, year: number) {
   return `${MONTH_LABELS[month]}/${String(year).slice(-2)}`;
@@ -100,6 +108,7 @@ function toEditableTransaction(
     type: "expense",
     categoryId: billTransaction.category?.id ?? null,
     creditCardId,
+    bankAccountId: null,
     seriesId: billTransaction.seriesId,
     seriesKind: billTransaction.seriesKind,
     seriesIndex: billTransaction.seriesIndex,
@@ -266,11 +275,9 @@ function aggregateByCategory(transactions: CreditCardBillTransaction[]) {
 
 function BillCardVisual({
   creditCard,
-  cardholderName,
   onEdit,
 }: {
   creditCard: CreditCard;
-  cardholderName: string;
   onEdit: () => void;
 }) {
   const cardColor = creditCard.color ?? "#533afd";
@@ -312,8 +319,10 @@ function BillCardVisual({
       </p>
 
       <div className="mt-auto pt-3">
-        <p className="truncate text-[12px] font-normal uppercase tracking-wide">{cardholderName}</p>
-        <p className="mt-0.5 text-[11px] font-light text-white/70">{formatDueDayLabel(creditCard.dueDay)}</p>
+        <p className="truncate text-[12px] font-normal uppercase tracking-wide">{creditCard.name}</p>
+        <p className="mt-0.5 text-[11px] font-light text-white/70">
+          {formatDueDayLabel(creditCard.dueDay)}
+        </p>
       </div>
     </div>
   );
@@ -437,12 +446,7 @@ function BillStatCard({
   const toneStyle = billStatCardToneStyles[tone];
 
   return (
-    <div
-      className={cn(
-        "rounded-lg border px-4 py-3.5",
-        toneStyle.card,
-      )}
-    >
+    <div className={cn("rounded-lg border px-4 py-3.5", toneStyle.card)}>
       <div className="flex items-start gap-2.5">
         <span
           className={cn(
@@ -473,7 +477,11 @@ function BillStatCard({
 
 function BillLoadingSkeleton() {
   return (
-    <div className="grid gap-6 lg:grid-cols-[minmax(17rem,20rem)_1fr]" role="status" aria-live="polite">
+    <div
+      className="grid gap-6 lg:grid-cols-[minmax(17rem,20rem)_1fr]"
+      role="status"
+      aria-live="polite"
+    >
       <span className="sr-only">Carregando fatura</span>
       <div className="space-y-3">
         <Skeleton className="aspect-[1.75/1] w-full rounded-xl" />
@@ -497,11 +505,15 @@ function BillLoadingSkeleton() {
 export function CreditCardBillPage() {
   const { id } = useParams<{ id: string }>();
   const queryClient = useQueryClient();
-  const { user } = useAuth();
   const { categories, updateCategory } = useCategories();
   const { accounts } = useBankAccounts();
   const [referenceDate, setReferenceDate] = useState(() => new Date());
-  const { bill, isLoading, isBillLoading, error: billQueryError } = useCreditCardBill(id, referenceDate);
+  const {
+    bill,
+    isLoading,
+    isBillLoading,
+    error: billQueryError,
+  } = useCreditCardBill(id, referenceDate);
   const error = !id ? "Cartão inválido." : billQueryError;
   const [searchQuery, setSearchQuery] = useState("");
   const [sortColumn, setSortColumn] = useState<BillTransactionSortColumn>("date");
@@ -568,7 +580,6 @@ export function CreditCardBillPage() {
       ? getCreditLimitUsedPercent(limitUsedCents, creditLimitCents)
       : null;
 
-  const cardholderName = getUserDisplayName(user?.name, user?.email).toUpperCase();
   const canCreateTransaction = Boolean(creditCard?.isActive && !creditCard?.isBlocked);
   const activeAccounts = useMemo(() => accounts.filter((account) => account.isActive), [accounts]);
 
@@ -619,7 +630,9 @@ export function CreditCardBillPage() {
     setTransactionFormOpen(true);
   };
 
-  const handleSubmitTransaction = async (values: CreateTransactionInput | UpdateTransactionInput) => {
+  const handleSubmitTransaction = async (
+    values: CreateTransactionInput | UpdateTransactionInput,
+  ) => {
     if (!creditCard) {
       return;
     }
@@ -773,10 +786,7 @@ export function CreditCardBillPage() {
     () => getMonthNavigatorMonths(referenceDate, currentOpenBillMonth),
     [currentOpenBillMonth, referenceDate],
   );
-  const defaultTransactionDate = useMemo(
-    () => getTodayInMonth(referenceDate),
-    [referenceDate],
-  );
+  const defaultTransactionDate = useMemo(() => getTodayInMonth(referenceDate), [referenceDate]);
 
   const isCurrentOpenBillOverdue =
     creditCard && currentOpenBillMonth
@@ -786,453 +796,463 @@ export function CreditCardBillPage() {
   return (
     <>
       <PageShell className="max-w-7xl">
-      {isLoading && !bill ? <BillLoadingSkeleton /> : null}
+        {isLoading && !bill ? <BillLoadingSkeleton /> : null}
 
-      {!isLoading && error ? (
-        <div className="rounded-lg border border-hairline bg-canvas p-6 text-[15px] font-light text-muted-foreground shadow-[var(--shadow-card)]">
-          {error}
-        </div>
-      ) : null}
+        {!isLoading && error ? (
+          <div className="rounded-lg border border-hairline bg-canvas p-6 text-[15px] font-light text-muted-foreground shadow-[var(--shadow-card)]">
+            {error}
+          </div>
+        ) : null}
 
-      {!isLoading && !error && bill && creditCard ? (
-        <div className="grid gap-6 lg:grid-cols-[minmax(17rem,20rem)_1fr]">
-          <aside className="space-y-3">
-            <BillCardVisual
-              creditCard={creditCard}
-              cardholderName={cardholderName}
-              onEdit={openEditCreditCard}
-            />
+        {!isLoading && !error && bill && creditCard ? (
+          <div className="grid gap-6 lg:grid-cols-[minmax(17rem,20rem)_1fr]">
+            <aside className="space-y-3">
+              <BillCardVisual creditCard={creditCard} onEdit={openEditCreditCard} />
 
-            <BillSidebarCard>
-              <div className="flex items-start gap-2.5">
-                <span className="inline-flex size-8 shrink-0 items-center justify-center rounded-md bg-canvas-soft text-ink-mute">
-                  <FileText className="size-4" aria-hidden="true" />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-[13px] font-normal text-ink-mute">Fatura do mês</p>
-                  <p className="tabular-money mt-0.5 text-[26px] font-normal text-ink">
-                    {formatCents(currentOpenBillSpentCents)}
-                  </p>
-                  {isCurrentOpenBillOverdue ? (
-                    <p className="mt-0.5 text-[12px] font-normal text-amber-600">Fatura vencida</p>
-                  ) : (
-                    <p className="mt-0.5 text-[12px] font-light text-ink-mute">Em aberto</p>
-                  )}
-                </div>
-              </div>
-            </BillSidebarCard>
-
-            <BillSidebarCard
-              title="Situação"
-              titleAside={
-                <span className="shrink-0 rounded-full bg-amber-50 px-2.5 py-0.5 text-[12px] font-normal text-amber-700 ring-1 ring-amber-200/80">
-                  Em aberto
-                </span>
-              }
-            >
-              <dl className="mt-3 space-y-2">
-                <div className="flex items-center justify-between gap-3 text-[13px]">
-                  <dt className="font-light text-ink-mute">Limite total</dt>
-                  <dd className="tabular-money font-normal text-ink">
-                    {formatCents(creditLimitCents ?? 0)}
-                  </dd>
-                </div>
-                <div className="flex items-center justify-between gap-3 text-[13px]">
-                  <dt className="font-light text-ink-mute">Disponível</dt>
-                  <dd
-                    className={cn(
-                      "tabular-money font-normal",
-                      currentOpenAvailableLimitCents != null && currentOpenAvailableLimitCents <= 0
-                        ? "text-destructive"
-                        : "text-emerald-600",
+              <BillSidebarCard>
+                <div className="flex items-start gap-2.5">
+                  <span className="inline-flex size-8 shrink-0 items-center justify-center rounded-md bg-canvas-soft text-ink-mute">
+                    <FileText className="size-4" aria-hidden="true" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[13px] font-normal text-ink-mute">Fatura do mês</p>
+                    <p className="tabular-money mt-0.5 text-[26px] font-normal text-ink">
+                      {formatCents(currentOpenBillSpentCents)}
+                    </p>
+                    {isCurrentOpenBillOverdue ? (
+                      <p className="mt-0.5 text-[12px] font-normal text-amber-600">
+                        Fatura vencida
+                      </p>
+                    ) : (
+                      <p className="mt-0.5 text-[12px] font-light text-ink-mute">Em aberto</p>
                     )}
-                  >
-                    {formatCents(currentOpenAvailableLimitCents ?? 0)}
-                  </dd>
+                  </div>
                 </div>
-                <div className="flex items-center justify-between gap-3 text-[13px]">
-                  <dt className="font-light text-ink-mute">Vencimento</dt>
-                  <dd className="font-normal text-ink">{formatDueDayLabel(creditCard.dueDay)}</dd>
-                </div>
-              </dl>
-              {currentOpenLimitPercent != null && creditLimitCents != null ? (
-                <BillLimitProgress
-                  spentCents={limitUsedCents}
-                  limitCents={creditLimitCents}
-                  label="Uso do limite"
-                  className="mt-2.5"
-                />
-              ) : null}
-            </BillSidebarCard>
-
-            {categoryBreakdown.length > 0 ? (
-              <BillSidebarCard title="Por categoria">
-                <ul className="mt-2.5 space-y-3">
-                  {categoryBreakdown.slice(0, 5).map((category) => {
-                    const sharePercent =
-                      totalSpentCents > 0
-                        ? Math.round((category.totalCents / totalSpentCents) * 100)
-                        : 0;
-                    const hasBudget =
-                      category.spendingLimitCents != null && category.monthSpentCents != null;
-                    const budgetPercent =
-                      hasBudget && category.monthSpentCents != null && category.spendingLimitCents != null
-                        ? getBudgetUsedPercent(category.monthSpentCents, category.spendingLimitCents)
-                        : null;
-                    const progressPercent = budgetPercent ?? sharePercent;
-                    const progressFillPercent = Math.min(progressPercent, 100);
-                    const budgetFillColor =
-                      budgetPercent != null && budgetPercent >= 100
-                        ? "bg-destructive"
-                        : budgetPercent != null && budgetPercent >= 80
-                          ? "bg-amber-500"
-                          : "bg-primary";
-                    const isOverBudget =
-                      category.spendingLimitCents != null &&
-                      (budgetPercent != null
-                        ? budgetPercent >= 100
-                        : category.totalCents > category.spendingLimitCents);
-
-                    return (
-                      <li key={category.categoryId ?? category.name} className="group/category">
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex min-w-0 flex-1 items-center gap-1.5">
-                            <span
-                              className="inline-flex size-6 shrink-0 items-center justify-center rounded-full"
-                              style={{ backgroundColor: `${category.color}22` }}
-                            >
-                              <CategoryIcon icon={category.icon} color={category.color} size={14} />
-                            </span>
-                            <span className="min-w-0 truncate text-[13px] font-light text-ink">
-                              {category.name}
-                            </span>
-                            {category.categoryId ? (
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="size-6 shrink-0 opacity-0 transition-opacity group-hover/category:opacity-100 focus-visible:opacity-100"
-                                aria-label={`Editar ${category.name}`}
-                                onClick={() => {
-                                  if (category.categoryId) {
-                                    openEditCategory(category.categoryId);
-                                  }
-                                }}
-                              >
-                                <Pencil className="size-3.5" />
-                              </Button>
-                            ) : null}
-                          </div>
-                          <span className="tabular-money shrink-0 text-[13px] font-normal">
-                            <span className={isOverBudget ? "text-destructive" : "text-ink"}>
-                              {formatCents(category.totalCents)}
-                            </span>
-                            {category.spendingLimitCents != null ? (
-                              <>
-                                <span className="font-light text-ink-mute"> / </span>
-                                <span className="font-light text-ink-mute">
-                                  {formatCents(category.spendingLimitCents)}
-                                </span>
-                              </>
-                            ) : null}
-                          </span>
-                        </div>
-                        <div
-                          className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-canvas-soft"
-                          role="progressbar"
-                          aria-valuenow={progressPercent}
-                          aria-valuemin={0}
-                          aria-valuemax={100}
-                          aria-label={
-                            budgetPercent != null &&
-                            category.monthSpentCents != null &&
-                            category.spendingLimitCents != null
-                              ? `${category.name}: ${formatBudgetUsedPercent(category.monthSpentCents, category.spendingLimitCents)} do orçamento utilizado no mês`
-                              : `${category.name}: ${sharePercent}% da fatura`
-                          }
-                        >
-                          <div
-                            className={cn(
-                              "h-full rounded-full motion-reduce:transition-none",
-                              budgetPercent != null ? budgetFillColor : undefined,
-                            )}
-                            style={{
-                              width: `${progressFillPercent}%`,
-                              ...(budgetPercent == null ? { backgroundColor: category.color } : {}),
-                            }}
-                          />
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
               </BillSidebarCard>
-            ) : null}
-          </aside>
 
-          <div className="min-w-0 space-y-4">
-            <div
-              className={cn(
-                "flex w-full items-center gap-1.5 transition-opacity",
-                isBillLoading && "pointer-events-none opacity-60",
-              )}
-            >
-              <button
-                type="button"
-                onClick={() => shiftSelectedMonth(-1)}
-                disabled={isBillLoading}
-                className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-hairline bg-canvas text-ink-mute transition-colors hover:bg-canvas-soft hover:text-ink disabled:opacity-50"
-                aria-label="Mês anterior"
-              >
-                <ChevronLeft className="size-4" aria-hidden="true" />
-              </button>
-              <div className="flex min-w-0 flex-1 items-center gap-1">
-                {monthNavigator.map((month) => (
-                  <button
-                    key={`${month.year}-${month.month}`}
-                    type="button"
-                    disabled={isBillLoading}
-                    onClick={() => selectMonth(month.month, month.year)}
-                    aria-current={month.isSelected ? "date" : undefined}
-                    aria-label={
-                      month.isCurrentOpenBill && !month.isSelected
-                        ? `${month.label}, fatura atual aberta`
-                        : month.label
-                    }
-                    className={cn(
-                      "inline-flex min-w-0 flex-1 items-center justify-center rounded-lg border px-2 py-1.5 text-[13px] font-normal transition-colors",
-                      month.isSelected
-                        ? "border-primary bg-primary text-on-primary shadow-none"
-                        : month.isCurrentOpenBill
-                          ? "border-primary bg-transparent text-ink hover:bg-canvas-soft"
-                          : "border-transparent bg-transparent text-ink-mute hover:bg-canvas-soft hover:text-ink",
-                    )}
-                  >
-                    {month.label}
-                  </button>
-                ))}
-              </div>
-              <button
-                type="button"
-                onClick={() => shiftSelectedMonth(1)}
-                disabled={isBillLoading}
-                className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-hairline bg-canvas text-ink-mute transition-colors hover:bg-canvas-soft hover:text-ink disabled:opacity-50"
-                aria-label="Próximo mês"
-              >
-                <ChevronRight className="size-4" aria-hidden="true" />
-              </button>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-3">
-              <BillStatCard
-                icon={FileText}
-                label="Total da fatura"
-                value={formatCents(totalSpentCents)}
-                detail={`${bill.transactions.length} transaç${bill.transactions.length === 1 ? "ão" : "ões"}`}
-                tone="primary"
-              />
-              <BillStatCard
-                icon={TrendingUp}
-                label="Maior gasto"
-                value={largestTransaction ? formatCents(largestTransaction.amount) : "—"}
-                detail={largestTransaction?.description}
-                tone="expense"
-              />
-              <BillStatCard
-                icon={Calculator}
-                label="Média por compra"
-                value={bill.transactions.length > 0 ? formatCents(averagePerPurchase) : "—"}
-                detail={
-                  bill.transactions.length > 0
-                    ? `${bill.transactions.length} compra${bill.transactions.length === 1 ? "" : "s"} no ciclo`
-                    : undefined
+              <BillSidebarCard
+                title="Situação"
+                titleAside={
+                  <span className="shrink-0 rounded-full bg-amber-50 px-2.5 py-0.5 text-[12px] font-normal text-amber-700 ring-1 ring-amber-200/80">
+                    Em aberto
+                  </span>
                 }
-                tone="insight"
-              />
-            </div>
-
-            <section className="overflow-hidden rounded-lg border border-hairline bg-canvas shadow-[var(--shadow-card)]">
-              <div className="flex flex-col gap-3 border-b border-hairline px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex items-center gap-2">
-                  <h2 className="text-heading-sm text-ink">Lançamentos</h2>
-                  {canCreateTransaction ? (
-                    <Button
-                      type="button"
-                      size="icon"
-                      className="size-8 shrink-0 [&_svg]:size-3.5"
-                      aria-label="Nova transação"
-                      onClick={openCreate}
+              >
+                <dl className="mt-3 space-y-2">
+                  <div className="flex items-center justify-between gap-3 text-[13px]">
+                    <dt className="font-light text-ink-mute">Limite total</dt>
+                    <dd className="tabular-money font-normal text-ink">
+                      {formatCents(creditLimitCents ?? 0)}
+                    </dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 text-[13px]">
+                    <dt className="font-light text-ink-mute">Disponível</dt>
+                    <dd
+                      className={cn(
+                        "tabular-money font-normal",
+                        currentOpenAvailableLimitCents != null &&
+                          currentOpenAvailableLimitCents <= 0
+                          ? "text-destructive"
+                          : "text-emerald-600",
+                      )}
                     >
-                      <Plus aria-hidden="true" />
-                    </Button>
-                  ) : null}
-                </div>
-                <div className="relative w-full sm:max-w-xs">
-                  <Search
-                    className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-ink-mute"
-                    aria-hidden="true"
+                      {formatCents(currentOpenAvailableLimitCents ?? 0)}
+                    </dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 text-[13px]">
+                    <dt className="font-light text-ink-mute">Vencimento</dt>
+                    <dd className="font-normal text-ink">{formatDueDayLabel(creditCard.dueDay)}</dd>
+                  </div>
+                </dl>
+                {currentOpenLimitPercent != null && creditLimitCents != null ? (
+                  <BillLimitProgress
+                    spentCents={limitUsedCents}
+                    limitCents={creditLimitCents}
+                    label="Uso do limite"
+                    className="mt-2.5"
                   />
-                  <Input
-                    type="search"
-                    value={searchQuery}
-                    onChange={(event) => setSearchQuery(event.target.value)}
-                    placeholder="Buscar lançamento..."
-                    className="h-9 bg-canvas-soft pl-9"
-                    aria-label="Buscar lançamento"
-                  />
+                ) : null}
+              </BillSidebarCard>
+
+              {categoryBreakdown.length > 0 ? (
+                <BillSidebarCard title="Por categoria">
+                  <ul className="mt-2.5 space-y-3">
+                    {categoryBreakdown.slice(0, 5).map((category) => {
+                      const sharePercent =
+                        totalSpentCents > 0
+                          ? Math.round((category.totalCents / totalSpentCents) * 100)
+                          : 0;
+                      const hasBudget =
+                        category.spendingLimitCents != null && category.monthSpentCents != null;
+                      const budgetPercent =
+                        hasBudget &&
+                        category.monthSpentCents != null &&
+                        category.spendingLimitCents != null
+                          ? getBudgetUsedPercent(
+                              category.monthSpentCents,
+                              category.spendingLimitCents,
+                            )
+                          : null;
+                      const progressPercent = budgetPercent ?? sharePercent;
+                      const progressFillPercent = Math.min(progressPercent, 100);
+                      const budgetFillColor =
+                        budgetPercent != null && budgetPercent >= 100
+                          ? "bg-destructive"
+                          : budgetPercent != null && budgetPercent >= 80
+                            ? "bg-amber-500"
+                            : "bg-primary";
+                      const isOverBudget =
+                        category.spendingLimitCents != null &&
+                        (budgetPercent != null
+                          ? budgetPercent >= 100
+                          : category.totalCents > category.spendingLimitCents);
+
+                      return (
+                        <li key={category.categoryId ?? category.name} className="group/category">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                              <span
+                                className="inline-flex size-6 shrink-0 items-center justify-center rounded-full"
+                                style={{ backgroundColor: `${category.color}22` }}
+                              >
+                                <CategoryIcon
+                                  icon={category.icon}
+                                  color={category.color}
+                                  size={14}
+                                />
+                              </span>
+                              <span className="min-w-0 truncate text-[13px] font-light text-ink">
+                                {category.name}
+                              </span>
+                              {category.categoryId ? (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="size-6 shrink-0 opacity-0 transition-opacity group-hover/category:opacity-100 focus-visible:opacity-100"
+                                  aria-label={`Editar ${category.name}`}
+                                  onClick={() => {
+                                    if (category.categoryId) {
+                                      openEditCategory(category.categoryId);
+                                    }
+                                  }}
+                                >
+                                  <Pencil className="size-3.5" />
+                                </Button>
+                              ) : null}
+                            </div>
+                            <span className="tabular-money shrink-0 text-[13px] font-normal">
+                              <span className={isOverBudget ? "text-destructive" : "text-ink"}>
+                                {formatCents(category.totalCents)}
+                              </span>
+                              {category.spendingLimitCents != null ? (
+                                <>
+                                  <span className="font-light text-ink-mute"> / </span>
+                                  <span className="font-light text-ink-mute">
+                                    {formatCents(category.spendingLimitCents)}
+                                  </span>
+                                </>
+                              ) : null}
+                            </span>
+                          </div>
+                          <div
+                            className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-canvas-soft"
+                            role="progressbar"
+                            aria-valuenow={progressPercent}
+                            aria-valuemin={0}
+                            aria-valuemax={100}
+                            aria-label={
+                              budgetPercent != null &&
+                              category.monthSpentCents != null &&
+                              category.spendingLimitCents != null
+                                ? `${category.name}: ${formatBudgetUsedPercent(category.monthSpentCents, category.spendingLimitCents)} do orçamento utilizado no mês`
+                                : `${category.name}: ${sharePercent}% da fatura`
+                            }
+                          >
+                            <div
+                              className={cn(
+                                "h-full rounded-full motion-reduce:transition-none",
+                                budgetPercent != null ? budgetFillColor : undefined,
+                              )}
+                              style={{
+                                width: `${progressFillPercent}%`,
+                                ...(budgetPercent == null
+                                  ? { backgroundColor: category.color }
+                                  : {}),
+                              }}
+                            />
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </BillSidebarCard>
+              ) : null}
+            </aside>
+
+            <div className="min-w-0 space-y-4">
+              <div
+                className={cn(
+                  "flex w-full items-center gap-1.5 transition-opacity",
+                  isBillLoading && "pointer-events-none opacity-60",
+                )}
+              >
+                <button
+                  type="button"
+                  onClick={() => shiftSelectedMonth(-1)}
+                  disabled={isBillLoading}
+                  className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-hairline bg-canvas text-ink-mute transition-colors hover:bg-canvas-soft hover:text-ink disabled:opacity-50"
+                  aria-label="Mês anterior"
+                >
+                  <ChevronLeft className="size-4" aria-hidden="true" />
+                </button>
+                <div className="flex min-w-0 flex-1 items-center gap-1">
+                  {monthNavigator.map((month) => (
+                    <button
+                      key={`${month.year}-${month.month}`}
+                      type="button"
+                      disabled={isBillLoading}
+                      onClick={() => selectMonth(month.month, month.year)}
+                      aria-current={month.isSelected ? "date" : undefined}
+                      aria-label={
+                        month.isCurrentOpenBill && !month.isSelected
+                          ? `${month.label}, fatura atual aberta`
+                          : month.label
+                      }
+                      className={cn(
+                        "inline-flex min-w-0 flex-1 items-center justify-center rounded-lg border px-2 py-1.5 text-[13px] font-normal transition-colors",
+                        month.isSelected
+                          ? "border-primary bg-primary text-on-primary shadow-none"
+                          : month.isCurrentOpenBill
+                            ? "border-primary bg-transparent text-ink hover:bg-canvas-soft"
+                            : "border-transparent bg-transparent text-ink-mute hover:bg-canvas-soft hover:text-ink",
+                      )}
+                    >
+                      {month.label}
+                    </button>
+                  ))}
                 </div>
+                <button
+                  type="button"
+                  onClick={() => shiftSelectedMonth(1)}
+                  disabled={isBillLoading}
+                  className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-hairline bg-canvas text-ink-mute transition-colors hover:bg-canvas-soft hover:text-ink disabled:opacity-50"
+                  aria-label="Próximo mês"
+                >
+                  <ChevronRight className="size-4" aria-hidden="true" />
+                </button>
               </div>
 
-              {bill.transactions.length === 0 ? (
-                <div className="px-6 py-12 text-center">
-                  <h3 className="text-heading-sm text-ink">Nenhuma despesa neste ciclo</h3>
-                  <p className="mx-auto mt-2 max-w-md text-[15px] font-light text-muted-foreground">
-                    As despesas lançadas neste cartão no período atual aparecerão aqui.
-                  </p>
-                  {canCreateTransaction ? (
-                    <Button
-                      type="button"
-                      size="sm"
-                      className="mt-6"
-                      onClick={openCreate}
-                    >
-                      <Plus aria-hidden="true" />
-                      Registrar primeira despesa
-                    </Button>
-                  ) : null}
+              <div className="grid gap-3 sm:grid-cols-3">
+                <BillStatCard
+                  icon={FileText}
+                  label="Total da fatura"
+                  value={formatCents(totalSpentCents)}
+                  detail={`${bill.transactions.length} transaç${bill.transactions.length === 1 ? "ão" : "ões"}`}
+                  tone="primary"
+                />
+                <BillStatCard
+                  icon={TrendingUp}
+                  label="Maior gasto"
+                  value={largestTransaction ? formatCents(largestTransaction.amount) : "—"}
+                  detail={largestTransaction?.description}
+                  tone="expense"
+                />
+                <BillStatCard
+                  icon={Calculator}
+                  label="Média por compra"
+                  value={bill.transactions.length > 0 ? formatCents(averagePerPurchase) : "—"}
+                  detail={
+                    bill.transactions.length > 0
+                      ? `${bill.transactions.length} compra${bill.transactions.length === 1 ? "" : "s"} no ciclo`
+                      : undefined
+                  }
+                  tone="insight"
+                />
+              </div>
+
+              <section className="overflow-hidden rounded-lg border border-hairline bg-canvas shadow-[var(--shadow-card)]">
+                <div className="flex flex-col gap-3 border-b border-hairline px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-heading-sm text-ink">Lançamentos</h2>
+                    {canCreateTransaction ? (
+                      <Button
+                        type="button"
+                        size="icon"
+                        className="size-8 shrink-0 [&_svg]:size-3.5"
+                        aria-label="Nova transação"
+                        onClick={openCreate}
+                      >
+                        <Plus aria-hidden="true" />
+                      </Button>
+                    ) : null}
+                  </div>
+                  <div className="relative w-full sm:max-w-xs">
+                    <Search
+                      className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-ink-mute"
+                      aria-hidden="true"
+                    />
+                    <Input
+                      type="search"
+                      value={searchQuery}
+                      onChange={(event) => setSearchQuery(event.target.value)}
+                      placeholder="Buscar lançamento..."
+                      className="h-9 bg-canvas-soft pl-9"
+                      aria-label="Buscar lançamento"
+                    />
+                  </div>
                 </div>
-              ) : filteredTransactions.length === 0 ? (
-                <div className="px-6 py-12 text-center">
-                  <p className="text-[15px] font-light text-muted-foreground">
-                    Nenhum lançamento corresponde à busca.
-                  </p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[640px] text-left">
-                    <thead className="border-b border-hairline bg-canvas-soft">
-                      <tr>
-                        <th
-                          scope="col"
-                          className="px-4 py-2.5 text-caption font-normal text-ink-mute"
-                        >
-                          Descrição
-                        </th>
-                        <BillSortableHeader
-                          label="Categoria"
-                          column="category"
-                          sortColumn={sortColumn}
-                          sortDirection={sortDirection}
-                          onSort={handleSort}
-                          className="hidden px-4 py-2.5 sm:table-cell"
-                        />
-                        <BillSortableHeader
-                          label="Data"
-                          column="date"
-                          sortColumn={sortColumn}
-                          sortDirection={sortDirection}
-                          onSort={handleSort}
-                          className="px-4 py-2.5"
-                        />
-                        <BillSortableHeader
-                          label="Valor"
-                          column="amount"
-                          sortColumn={sortColumn}
-                          sortDirection={sortDirection}
-                          onSort={handleSort}
-                          className="px-4 py-2.5 text-right"
-                          align="right"
-                        />
-                        <th scope="col" className="w-[4.5rem] px-2 py-2.5">
-                          <span className="sr-only">Ações</span>
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {sortedTransactions.map((transaction) => (
-                        <tr key={transaction.id} className="border-t border-hairline first:border-t-0">
-                          <td className="px-4 py-3">
-                            <div className="flex min-w-0 items-center gap-2.5">
+
+                {bill.transactions.length === 0 ? (
+                  <div className="px-6 py-12 text-center">
+                    <h3 className="text-heading-sm text-ink">Nenhuma despesa neste ciclo</h3>
+                    <p className="mx-auto mt-2 max-w-md text-[15px] font-light text-muted-foreground">
+                      As despesas lançadas neste cartão no período atual aparecerão aqui.
+                    </p>
+                    {canCreateTransaction ? (
+                      <Button type="button" size="sm" className="mt-6" onClick={openCreate}>
+                        <Plus aria-hidden="true" />
+                        Registrar primeira despesa
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : filteredTransactions.length === 0 ? (
+                  <div className="px-6 py-12 text-center">
+                    <p className="text-[15px] font-light text-muted-foreground">
+                      Nenhum lançamento corresponde à busca.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[640px] text-left">
+                      <thead className="border-b border-hairline bg-canvas-soft">
+                        <tr>
+                          <th
+                            scope="col"
+                            className="px-4 py-2.5 text-caption font-normal text-ink-mute"
+                          >
+                            Descrição
+                          </th>
+                          <BillSortableHeader
+                            label="Categoria"
+                            column="category"
+                            sortColumn={sortColumn}
+                            sortDirection={sortDirection}
+                            onSort={handleSort}
+                            className="hidden px-4 py-2.5 sm:table-cell"
+                          />
+                          <BillSortableHeader
+                            label="Data"
+                            column="date"
+                            sortColumn={sortColumn}
+                            sortDirection={sortDirection}
+                            onSort={handleSort}
+                            className="px-4 py-2.5"
+                          />
+                          <BillSortableHeader
+                            label="Valor"
+                            column="amount"
+                            sortColumn={sortColumn}
+                            sortDirection={sortDirection}
+                            onSort={handleSort}
+                            className="px-4 py-2.5 text-right"
+                            align="right"
+                          />
+                          <th scope="col" className="w-[4.5rem] px-2 py-2.5">
+                            <span className="sr-only">Ações</span>
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sortedTransactions.map((transaction) => (
+                          <tr
+                            key={transaction.id}
+                            className="border-t border-hairline first:border-t-0"
+                          >
+                            <td className="px-4 py-3">
+                              <div className="flex min-w-0 items-center gap-2.5">
+                                {transaction.category ? (
+                                  <span
+                                    className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg"
+                                    style={{ backgroundColor: `${transaction.category.color}18` }}
+                                  >
+                                    <CategoryIcon
+                                      icon={transaction.category.icon}
+                                      color={transaction.category.color}
+                                      size={16}
+                                    />
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg bg-canvas-soft text-[12px] font-normal text-ink-mute">
+                                    {transaction.description.charAt(0).toUpperCase()}
+                                  </span>
+                                )}
+                                <div className="flex min-w-0 flex-col gap-1">
+                                  <span className="truncate text-[15px] font-normal text-ink">
+                                    {transaction.description}
+                                  </span>
+                                  <TransactionSeriesBadge transaction={transaction} />
+                                </div>
+                              </div>
+                            </td>
+                            <td className="hidden px-4 py-3 sm:table-cell">
                               {transaction.category ? (
-                                <span
-                                  className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg"
-                                  style={{ backgroundColor: `${transaction.category.color}18` }}
-                                >
-                                  <CategoryIcon
-                                    icon={transaction.category.icon}
-                                    color={transaction.category.color}
-                                    size={16}
-                                  />
-                                </span>
+                                <CategoryBadge
+                                  name={transaction.category.name}
+                                  icon={transaction.category.icon}
+                                  color={transaction.category.color}
+                                />
                               ) : (
-                                <span className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg bg-canvas-soft text-[12px] font-normal text-ink-mute">
-                                  {transaction.description.charAt(0).toUpperCase()}
+                                <span className="text-caption text-muted-foreground">
+                                  Sem categoria
                                 </span>
                               )}
-                              <div className="flex min-w-0 flex-col gap-1">
-                                <span className="truncate text-[15px] font-normal text-ink">
-                                  {transaction.description}
-                                </span>
-                                <TransactionSeriesBadge transaction={transaction} />
+                            </td>
+                            <td className="px-4 py-3 text-caption text-ink-mute">
+                              {new Date(transaction.date).toLocaleDateString("pt-BR", {
+                                day: "2-digit",
+                                month: "2-digit",
+                              })}
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              <span className="tabular-money text-[15px] font-normal text-destructive">
+                                -{formatCents(transaction.amount)}
+                              </span>
+                            </td>
+                            <td className="px-2 py-3">
+                              <div className="flex items-center justify-end gap-0.5">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="size-8"
+                                  aria-label={`Editar ${transaction.description}`}
+                                  onClick={() => openEdit(transaction)}
+                                >
+                                  <Pencil className="size-4" />
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost-destructive"
+                                  size="icon"
+                                  className="size-8"
+                                  aria-label={`Excluir ${transaction.description}`}
+                                  onClick={() => requestDeleteTransaction(transaction)}
+                                >
+                                  <Trash2 className="size-4" />
+                                </Button>
                               </div>
-                            </div>
-                          </td>
-                          <td className="hidden px-4 py-3 sm:table-cell">
-                            {transaction.category ? (
-                              <CategoryBadge
-                                name={transaction.category.name}
-                                icon={transaction.category.icon}
-                                color={transaction.category.color}
-                              />
-                            ) : (
-                              <span className="text-caption text-muted-foreground">Sem categoria</span>
-                            )}
-                          </td>
-                          <td className="px-4 py-3 text-caption text-ink-mute">
-                            {new Date(transaction.date).toLocaleDateString("pt-BR", {
-                              day: "2-digit",
-                              month: "2-digit",
-                            })}
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            <span className="tabular-money text-[15px] font-normal text-destructive">
-                              -{formatCents(transaction.amount)}
-                            </span>
-                          </td>
-                          <td className="px-2 py-3">
-                            <div className="flex items-center justify-end gap-0.5">
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="size-8"
-                                aria-label={`Editar ${transaction.description}`}
-                                onClick={() => openEdit(transaction)}
-                              >
-                                <Pencil className="size-4" />
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost-destructive"
-                                size="icon"
-                                className="size-8"
-                                aria-label={`Excluir ${transaction.description}`}
-                                onClick={() => requestDeleteTransaction(transaction)}
-                              >
-                                <Trash2 className="size-4" />
-                              </Button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </section>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+            </div>
           </div>
-        </div>
-      ) : null}
+        ) : null}
       </PageShell>
 
       {creditCard ? (
@@ -1257,6 +1277,7 @@ export function CreditCardBillPage() {
           }}
           transaction={editingTransaction}
           categories={categories}
+          bankAccounts={activeAccounts}
           creditCards={[creditCard]}
           defaultCreditCardId={creditCard.id}
           defaultDate={defaultTransactionDate}
@@ -1278,7 +1299,8 @@ export function CreditCardBillPage() {
         onSubmit={handleSubmitCategory}
       />
 
-      {scopeDialogMode && (pendingEdit?.transaction.description ?? deletingTransaction?.description) ? (
+      {scopeDialogMode &&
+      (pendingEdit?.transaction.description ?? deletingTransaction?.description) ? (
         <SeriesScopeDialog
           open={Boolean(scopeDialogMode)}
           onOpenChange={(open) => {
@@ -1310,8 +1332,8 @@ export function CreditCardBillPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Excluir transação?</AlertDialogTitle>
             <AlertDialogDescription>
-              A transação &quot;{deletingTransaction?.description}&quot; será removida permanentemente
-              deste cartão.
+              A transação &quot;{deletingTransaction?.description}&quot; será removida
+              permanentemente deste cartão.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

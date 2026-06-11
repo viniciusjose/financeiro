@@ -26,6 +26,7 @@ export const transactionService = new TransactionService(
   transactionRepository,
   categoryService,
   creditCardService,
+  bankAccountRepository,
 );
 export const bankAccountService = new BankAccountService(
   bankAccountRepository,

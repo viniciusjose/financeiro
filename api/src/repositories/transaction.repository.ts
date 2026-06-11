@@ -1,7 +1,8 @@
-import { and, count, desc, eq, gte, inArray, isNotNull, sql, sum } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
+import { and, count, desc, eq, gte, inArray, isNotNull, sql, sum } from "drizzle-orm";
 import { db } from "@/db/index.js";
 import { formatDateInTimezone, getCurrentMonthStartDateString } from "@/lib/credit-card-billing.js";
+import { bankAccounts } from "@/models/schema/bank-accounts.js";
 import { categories } from "@/models/schema/categories.js";
 import { creditCards } from "@/models/schema/credit-cards.js";
 import {
@@ -30,6 +31,12 @@ export type TransactionWithCategory = Transaction & {
     brand: "visa" | "mastercard" | "elo" | "amex" | "hipercard" | "diners" | "other";
     brandName: string | null;
   } | null;
+  bankAccount: {
+    id: string;
+    name: string;
+    bank: "itau" | "sofisa" | "nubank" | "inter" | "other";
+    bankName: string | null;
+  } | null;
 };
 
 export class TransactionRepository {
@@ -50,10 +57,17 @@ export class TransactionRepository {
           brand: creditCards.brand,
           brandName: creditCards.brandName,
         },
+        bankAccount: {
+          id: bankAccounts.id,
+          name: bankAccounts.name,
+          bank: bankAccounts.bank,
+          bankName: bankAccounts.bankName,
+        },
       })
       .from(transactions)
       .leftJoin(categories, eq(transactions.categoryId, categories.id))
       .leftJoin(creditCards, eq(transactions.creditCardId, creditCards.id))
+      .leftJoin(bankAccounts, eq(transactions.bankAccountId, bankAccounts.id))
       .where(and(eq(transactions.id, id), eq(transactions.userId, userId)))
       .limit(1);
 
@@ -84,10 +98,17 @@ export class TransactionRepository {
             brand: creditCards.brand,
             brandName: creditCards.brandName,
           },
+          bankAccount: {
+            id: bankAccounts.id,
+            name: bankAccounts.name,
+            bank: bankAccounts.bank,
+            bankName: bankAccounts.bankName,
+          },
         })
         .from(transactions)
         .leftJoin(categories, eq(transactions.categoryId, categories.id))
         .leftJoin(creditCards, eq(transactions.creditCardId, creditCards.id))
+        .leftJoin(bankAccounts, eq(transactions.bankAccountId, bankAccounts.id))
         .where(eq(transactions.userId, userId))
         .orderBy(desc(transactions.date))
         .limit(perPage)
@@ -142,10 +163,17 @@ export class TransactionRepository {
             brand: creditCards.brand,
             brandName: creditCards.brandName,
           },
+          bankAccount: {
+            id: bankAccounts.id,
+            name: bankAccounts.name,
+            bank: bankAccounts.bank,
+            bankName: bankAccounts.bankName,
+          },
         })
         .from(transactions)
         .leftJoin(categories, eq(transactions.categoryId, categories.id))
         .leftJoin(creditCards, eq(transactions.creditCardId, creditCards.id))
+        .leftJoin(bankAccounts, eq(transactions.bankAccountId, bankAccounts.id))
         .where(
           inArray(
             transactions.id,
@@ -175,17 +203,28 @@ export class TransactionRepository {
           brand: creditCards.brand,
           brandName: creditCards.brandName,
         },
+        bankAccount: {
+          id: bankAccounts.id,
+          name: bankAccounts.name,
+          bank: bankAccounts.bank,
+          bankName: bankAccounts.bankName,
+        },
       })
       .from(transactions)
       .leftJoin(categories, eq(transactions.categoryId, categories.id))
       .leftJoin(creditCards, eq(transactions.creditCardId, creditCards.id))
+      .leftJoin(bankAccounts, eq(transactions.bankAccountId, bankAccounts.id))
       .where(and(eq(transactions.seriesId, seriesId), eq(transactions.userId, userId)))
       .orderBy(transactions.seriesIndex);
 
     return rows.map(mapRow);
   }
 
-  async deleteFromSeriesIndex(seriesId: string, userId: string, fromIndex: number): Promise<number> {
+  async deleteFromSeriesIndex(
+    seriesId: string,
+    userId: string,
+    fromIndex: number,
+  ): Promise<number> {
     const result = await db
       .delete(transactions)
       .where(
@@ -271,10 +310,17 @@ export class TransactionRepository {
           brand: creditCards.brand,
           brandName: creditCards.brandName,
         },
+        bankAccount: {
+          id: bankAccounts.id,
+          name: bankAccounts.name,
+          bank: bankAccounts.bank,
+          bankName: bankAccounts.bankName,
+        },
       })
       .from(transactions)
       .leftJoin(categories, eq(transactions.categoryId, categories.id))
       .leftJoin(creditCards, eq(transactions.creditCardId, creditCards.id))
+      .leftJoin(bankAccounts, eq(transactions.bankAccountId, bankAccounts.id))
       .where(
         and(
           eq(transactions.userId, userId),
@@ -447,10 +493,17 @@ function mapRow(row: {
     brand: "visa" | "mastercard" | "elo" | "amex" | "hipercard" | "diners" | "other";
     brandName: string | null;
   } | null;
+  bankAccount: {
+    id: string;
+    name: string;
+    bank: "itau" | "sofisa" | "nubank" | "inter" | "other";
+    bankName: string | null;
+  } | null;
 }): TransactionWithCategory {
   return {
     ...row.transaction,
     category: row.category?.id ? row.category : null,
     creditCard: row.creditCard?.id ? row.creditCard : null,
+    bankAccount: row.bankAccount?.id ? row.bankAccount : null,
   };
 }

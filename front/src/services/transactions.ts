@@ -1,5 +1,10 @@
 import { api } from "@/lib/api";
-import type { ApplyScope, CreateTransactionInput, UpdateTransactionInput } from "@/schemas/transaction.schema";
+import type { BankInstitution } from "@/lib/bank-logos";
+import type {
+  ApplyScope,
+  CreateTransactionInput,
+  UpdateTransactionInput,
+} from "@/schemas/transaction.schema";
 import { toApiCreatePayload, toApiUpdatePayload } from "@/schemas/transaction.schema";
 
 export interface TransactionCategory {
@@ -17,6 +22,13 @@ export interface TransactionCreditCard {
   brandName: string | null;
 }
 
+export interface TransactionBankAccount {
+  id: string;
+  name: string;
+  bank: BankInstitution;
+  bankName: string | null;
+}
+
 export interface Transaction {
   id: string;
   description: string;
@@ -24,12 +36,14 @@ export interface Transaction {
   type: "income" | "expense";
   categoryId: string | null;
   creditCardId: string | null;
+  bankAccountId: string | null;
   seriesId: string | null;
   seriesKind: "installment" | "recurring" | null;
   seriesIndex: number | null;
   seriesTotal: number | null;
   category?: TransactionCategory;
   creditCard?: TransactionCreditCard;
+  bankAccount?: TransactionBankAccount;
   date: string;
   createdAt: string;
   updatedAt: string;
